@@ -14,16 +14,31 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.IO;
 using Ingr.SP3D.Common.Middle;
 
 namespace Protofile.Sp3d
 {
     public class PipeRunNameRule : NameRuleBase
     {
+        // Diagnostic log: proves whether SP3D loads and calls this rule.
+        // Look for it in the Windows temp folder of the user running SP3D.
+        private static void Log(string message)
+        {
+            try
+            {
+                File.AppendAllText(
+                    Path.Combine(Path.GetTempPath(), "PipeRunNameRule.log"),
+                    DateTime.Now.ToString("s") + " " + message + Environment.NewLine);
+            }
+            catch { /* logging must never break naming */ }
+        }
+
         // The pipeline is the naming parent, so the name is recomputed
         // when the run is moved to another pipeline.
         public override Collection<BusinessObject> GetNamingParents(BusinessObject oEntity)
         {
+            Log("GetNamingParents called");
             var parents = new Collection<BusinessObject>();
             // VERIFY: how to get the parent pipeline (system) of a pipe run.
             ISystemChild child = oEntity as ISystemChild;
@@ -36,6 +51,20 @@ namespace Protofile.Sp3d
             BusinessObject oEntity,
             ReadOnlyCollection<BusinessObject> oParents,
             BusinessObject oActiveEntity)
+        {
+            Log("ComputeName called, parents=" + (oParents == null ? "null" : oParents.Count.ToString()));
+            try
+            {
+                ComputeNameCore(oEntity, oParents);
+            }
+            catch (Exception ex)
+            {
+                Log("ComputeName FAILED: " + ex);
+                throw;
+            }
+        }
+
+        private void ComputeNameCore(BusinessObject oEntity, ReadOnlyCollection<BusinessObject> oParents)
         {
             if (oEntity == null) throw new ArgumentNullException("oEntity");
             if (oParents == null || oParents.Count == 0) return; // no pipeline yet: keep current name
@@ -61,6 +90,7 @@ namespace Protofile.Sp3d
 
             // VERIFY: the delivered rules write the name with SetPropertyValue.
             oEntity.SetPropertyValue(name, "IJNamedItem", "Name");
+            Log("Named '" + name + "'");
         }
     }
 }
