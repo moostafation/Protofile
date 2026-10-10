@@ -60,10 +60,10 @@ Every run in a pipeline can then be traced to its line number from the name alon
 
 The rule is written in code, built into a DLL, then added to the project.
 
-1. The naming logic is in `src/PipeRunNameRule.cs`. It is a draft and has not been compiled or tested.
+1. The naming logic is in `PipeRunNameRule/PipeRunNameRule.cs`. It is a draft and has not been compiled or tested.
    - `PipeRunNaming.Build` has no SP3D dependency, so it can be unit tested alone.
    - The SP3D adapter is only a TODO. It has to be written against your SP3D version's naming rule API.
-2. Build the DLL.
+2. Open `Protofile.sln` in Visual Studio, run the tests, then build the DLL.
 3. Register the rule in the Catalog (bulkload, Naming Rules sheet) and assign it to the `PipeRun` class.
 4. Test with two pipelines and several runs each before using it on a live model.
 
