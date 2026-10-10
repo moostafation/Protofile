@@ -1,0 +1,57 @@
+# Piping class (pipe spec) A1A - example only.
+# A spec decides WHICH part is used for a given service and size; the catalog
+# decides the part's DIMENSIONS. Edit descriptions to match your company specs.
+
+name = "A1A"
+description = "Carbon steel, ASME B16.5 Class 150 RF, CA 1.5 mm, general hydrocarbon service"
+rating = "CL150"
+material = "Carbon steel"
+corrosion_allowance = 1.5     # mm
+min_pipe_length = 50.0        # mm, shorter pipe pieces are reported as warnings
+gasket_thickness = 3.0        # mm, compressed
+
+[[pipe]]
+from = "1/2"
+to = "1-1/2"
+schedule = "80"
+description = "PIPE, SMLS, BE, ASTM A106 Gr.B, ASME B36.10M"
+
+[[pipe]]
+from = "2"
+to = "24"
+schedule = "STD"
+description = "PIPE, SMLS, BE, ASTM A106 Gr.B, ASME B36.10M"
+
+[elbow90]
+description = "ELBOW 90 LR, BW, ASTM A234 WPB, ASME B16.9"
+skey = "ELBW"
+
+[elbow45]
+description = "ELBOW 45 LR, BW, ASTM A234 WPB, ASME B16.9"
+skey = "ELBW"
+
+[tee]
+description = "TEE EQUAL, BW, ASTM A234 WPB, ASME B16.9"
+skey = "TEBW"
+
+[flange]
+description = "FLANGE WN RF CL150, ASTM A105, ASME B16.5"
+skey = "FLWN"
+
+[gasket]
+description = "GASKET SPIRAL WOUND CL150, SS316/GRAPHITE, CS OUTER RING, ASME B16.20"
+
+[bolting]
+description = "STUD BOLT ASTM A193 B7 W/ 2 HEAVY HEX NUTS ASTM A194 2H"
+
+[valve.gate]
+description = "GATE VALVE CL150 RF, BODY ASTM A216 WCB, TRIM 8, API 600"
+skey = "VVFL"
+
+[valve.globe]
+description = "GLOBE VALVE CL150 RF, BODY ASTM A216 WCB, TRIM 8, BS 1873"
+skey = "VGFL"
+
+[valve.check]
+description = "CHECK VALVE SWING CL150 RF, BODY ASTM A216 WCB, TRIM 8, BS 1868"
+skey = "CKFL"

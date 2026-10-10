@@ -1,0 +1,479 @@
+<title>__PF_TITLE__</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: drawing-title-block header over a three-pane review desk (lines | 3D viewport | inspector); stacks on phones. */
+:root {
+  --bg: #e9edf0;
+  --panel: #f7f9fa;
+  --ink: #16212a;
+  --muted: #586874;
+  --rule: #cfd8de;
+  --accent: #0d6886;
+  --accent-ink: #ffffff;
+  --vp-top: #d9e1e7;
+  --vp-bottom: #f4f6f8;
+  --grid: #b9c4cc;
+  --equip: #8f9b8c;
+  --select: #e8a200;
+  --crit: #c4302b;
+  --crit-soft: #f7dedc;
+  --warn: #a35f00;
+  --ok: #24764a;
+  --l1: #2f6db5; --l2: #a0522d; --l3: #2b8a5a; --l4: #7a4fb0; --l5: #b8476b; --l6: #138a8a;
+  --font-display: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --s-1: 0.75rem; --s0: 0.875rem; --s1: 1rem; --s2: 1.25rem; --s3: 1.75rem;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f151a; --panel: #151e25; --ink: #e2e8ed; --muted: #92a2ae; --rule: #26323b;
+    --accent: #52b4d6; --accent-ink: #06222c; --vp-top: #0b1115; --vp-bottom: #1a242c;
+    --grid: #2c3a44; --equip: #6e7c6f; --select: #ffc12e; --crit: #ff6e66; --crit-soft: #3a1e1d;
+    --warn: #f0a640; --ok: #5cc28d;
+    --l1: #6aa3e8; --l2: #d98a5f; --l3: #5cc28d; --l4: #a988e0; --l5: #e07a9c; --l6: #4cc4c4;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f151a; --panel: #151e25; --ink: #e2e8ed; --muted: #92a2ae; --rule: #26323b;
+  --accent: #52b4d6; --accent-ink: #06222c; --vp-top: #0b1115; --vp-bottom: #1a242c;
+  --grid: #2c3a44; --equip: #6e7c6f; --select: #ffc12e; --crit: #ff6e66; --crit-soft: #3a1e1d;
+  --warn: #f0a640; --ok: #5cc28d;
+  --l1: #6aa3e8; --l2: #d98a5f; --l3: #5cc28d; --l4: #a988e0; --l5: #e07a9c; --l6: #4cc4c4;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 400 var(--s0)/1.45 var(--font-body); }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.app { height: 100%; display: grid; grid-template-rows: auto 1fr; padding-inline: 16px; padding-block: 12px; gap: 12px; }
+
+/* Title block */
+.titleblock { display: grid; grid-template-columns: minmax(10rem, auto) repeat(auto-fit, minmax(7.5rem, 1fr)); border: 1.5px solid var(--ink); background: var(--panel); }
+.titleblock > div { padding: 6px 10px; border-left: 1px solid var(--rule); min-width: 0; }
+.titleblock > div:first-child { border-left: 0; display: flex; flex-direction: column; justify-content: center; }
+.brand { font: 600 var(--s3)/1 var(--font-display); letter-spacing: 0.02em; text-transform: uppercase; }
+.brand-sub { font: 500 var(--s-1)/1.2 var(--font-body); color: var(--muted); }
+.cell-label { display: block; font: 500 0.6875rem/1.2 var(--font-body); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.cell-value { display: block; font: 500 var(--s0)/1.3 var(--font-data); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 1px 8px; border-radius: 999px; font: 600 var(--s-1)/1.5 var(--font-body); }
+.pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.pill.crit { color: var(--crit); background: var(--crit-soft); }
+.pill.ok { color: var(--ok); }
+
+/* Desk */
+.desk { display: grid; grid-template-columns: 17rem minmax(0, 1fr) 21rem; gap: 12px; min-height: 0; }
+.pane { background: var(--panel); border: 1px solid var(--rule); min-height: 0; display: flex; flex-direction: column; }
+.pane-scroll { overflow: auto; min-height: 0; flex: 1; }
+.pane h2 { margin: 0; padding: 10px 12px 6px; font: 600 var(--s1)/1.2 var(--font-display); letter-spacing: 0.06em; text-transform: uppercase; }
+.list { list-style: none; margin: 0; padding: 0 6px 10px; display: grid; gap: 2px; }
+.row { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; gap: 8px; padding: 6px; border-radius: 4px; }
+.row:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.row input { margin: 0; accent-color: var(--accent); }
+.swatch { width: 10px; height: 22px; border-radius: 2px; background: var(--sw, var(--equip)); }
+.row-btn { all: unset; cursor: pointer; min-width: 0; display: grid; gap: 1px; }
+.row-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.row-title { font: 500 var(--s0)/1.25 var(--font-data); overflow-wrap: anywhere; }
+.row-meta { font-size: var(--s-1); color: var(--muted); }
+
+/* Viewport */
+.viewport { position: relative; min-height: 0; border: 1px solid var(--rule); background: linear-gradient(var(--vp-top), var(--vp-bottom)); overflow: hidden; }
+.viewport canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+.tools { position: absolute; top: 10px; left: 10px; display: flex; flex-wrap: wrap; gap: 0; border: 1px solid var(--rule); background: var(--panel); }
+.tools button { border: 0; background: transparent; padding: 6px 10px; cursor: pointer; font: 500 var(--s-1)/1 var(--font-body); letter-spacing: 0.04em; text-transform: uppercase; border-left: 1px solid var(--rule); }
+.tools button:first-child { border-left: 0; }
+.tools button:hover, .tools button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.axes { position: absolute; left: 10px; bottom: 8px; font: 400 0.6875rem/1.3 var(--font-data); color: var(--muted); }
+.hint { position: absolute; right: 10px; bottom: 8px; font-size: 0.6875rem; color: var(--muted); text-align: right; }
+.vp-msg { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; color: var(--muted); }
+
+/* Inspector */
+.tabs { display: flex; border-bottom: 1px solid var(--rule); }
+.tabs button { flex: 1; border: 0; background: transparent; padding: 10px 6px 8px; cursor: pointer; font: 600 var(--s0)/1 var(--font-display); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); border-bottom: 2px solid transparent; }
+.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.tab-body { padding: 12px; display: grid; gap: 14px; align-content: start; }
+.kind { font: 600 0.6875rem/1 var(--font-body); letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); }
+.uid { margin: 2px 0 0; font: 600 var(--s2)/1.2 var(--font-display); overflow-wrap: anywhere; text-wrap: balance; }
+.desc { margin: 0; color: var(--muted); }
+dl.props { margin: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; }
+dl.props dt { color: var(--muted); font-size: var(--s-1); padding-top: 1px; }
+dl.props dd { margin: 0; font: 400 var(--s-1)/1.45 var(--font-data); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.subhead { margin: 0; font: 600 0.6875rem/1 var(--font-body); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: var(--s-1); }
+th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-weight: 600; color: var(--muted); font-size: 0.6875rem; letter-spacing: 0.06em; text-transform: uppercase; }
+td.num { font-family: var(--font-data); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+td.mono { font-family: var(--font-data); white-space: nowrap; }
+.clash { all: unset; cursor: pointer; display: grid; gap: 4px; padding: 10px; border: 1px solid var(--rule); border-left: 4px solid var(--crit); }
+.clash.soft { border-left-color: var(--warn); }
+.clash:hover, .clash:focus-visible { background: color-mix(in srgb, var(--crit) 6%, transparent); }
+.clash-pair { font: 500 var(--s-1)/1.4 var(--font-data); overflow-wrap: anywhere; }
+.checks { margin: 0; padding-left: 1.1rem; display: grid; gap: 4px; font-size: var(--s-1); }
+.checks li { overflow-wrap: anywhere; }
+.note { margin: 0; font-size: var(--s-1); color: var(--muted); }
+.stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); }
+.stats div { background: var(--panel); padding: 8px 10px; }
+.stats b { display: block; font: 600 var(--s2)/1.1 var(--font-data); font-variant-numeric: tabular-nums; }
+
+@media (max-width: 1100px) {
+  .desk { grid-template-columns: 15rem minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
+  .inspector { grid-column: 1 / -1; max-height: 24rem; }
+}
+@media (max-width: 760px) {
+  html, body { height: auto; }
+  .app { height: auto; grid-template-rows: auto auto; }
+  .titleblock { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .titleblock > div:first-child { grid-column: 1 / -1; }
+  .titleblock > div:nth-child(even) { border-left: 0; }
+  .titleblock > div { border-top: 1px solid var(--rule); }
+  .desk { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; }
+  .viewport { height: 58vh; min-height: 320px; grid-row: 1; }
+  .inspector { max-height: none; }
+  .hint { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<div class="app">
+  <header class="titleblock" id="titleblock"></header>
+  <main class="desk">
+    <aside class="pane" aria-label="Model tree">
+      <div class="pane-scroll">
+        <h2>Lines</h2>
+        <ul class="list" id="line-list"></ul>
+        <h2>Equipment</h2>
+        <ul class="list" id="equip-list"></ul>
+      </div>
+    </aside>
+    <section class="viewport" id="viewport" aria-label="3D model">
+      <canvas id="scene"></canvas>
+      <div class="tools" role="toolbar" aria-label="Views">
+        <button type="button" id="view-iso" data-view="iso" aria-pressed="true">Iso</button>
+        <button type="button" id="view-plan" data-view="plan">Plan</button>
+        <button type="button" id="view-north" data-view="north">Look N</button>
+        <button type="button" id="view-west" data-view="west">Look W</button>
+        <button type="button" id="view-fit" data-view="fit">Fit</button>
+      </div>
+      <div class="axes">X East · Y North · Z Up · mm</div>
+      <div class="hint">Drag to orbit · right-drag to pan · scroll to zoom · tap to inspect</div>
+      <div class="vp-msg" id="vp-msg" hidden></div>
+    </section>
+    <aside class="pane inspector" aria-label="Inspector">
+      <div class="tabs" role="tablist">
+        <button type="button" role="tab" id="tab-inspect" aria-selected="true" data-tab="inspect">Inspect</button>
+        <button type="button" role="tab" id="tab-clash" aria-selected="false" data-tab="clash">Clashes</button>
+        <button type="button" role="tab" id="tab-mto" aria-selected="false" data-tab="mto">MTO</button>
+      </div>
+      <div class="pane-scroll">
+        <div class="tab-body" id="panel-inspect" role="tabpanel"></div>
+        <div class="tab-body" id="panel-clash" role="tabpanel" hidden></div>
+        <div class="tab-body" id="panel-mto" role="tabpanel" hidden></div>
+      </div>
+    </aside>
+  </main>
+</div>
+
+<script type="importmap">{"imports": {"three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js", "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
+<script type="application/json" id="pf-data">__PF_DATA__</script>
+<script type="module">
+const DATA = JSON.parse(document.getElementById("pf-data").textContent);
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const byUid = new Map(DATA.components.map((c) => [c.uid, c]));
+const lineIndex = new Map(DATA.lines.map((l, i) => [l.number, i]));
+const KIND_LABEL = { PIPE: "Pipe", ELBOW: "Elbow", TEE: "Tee", FLANGE: "Flange", GASKET: "Gasket", VALVE: "Valve", NOZZLE: "Nozzle", EQUIPMENT: "Equipment", BOLTING: "Bolting" };
+let viewer = null; // set once the 3D engine loads
+
+/* ---------- Title block ---------- */
+const P = DATA.project, S = DATA.stats;
+const hard = DATA.clashes.filter((c) => c.hard).length;
+$("titleblock").innerHTML = `
+  <div><span class="brand">PlantForge</span><span class="brand-sub">Model review</span></div>
+  <div><span class="cell-label">Project</span><span class="cell-value">${esc(P.name)}</span></div>
+  <div><span class="cell-label">Area / Unit</span><span class="cell-value">${esc([P.area, P.unit].filter(Boolean).join(" / ") || "—")}</span></div>
+  <div><span class="cell-label">Lines</span><span class="cell-value">${S.lines} · ${S.pipe_m.toFixed(1)} m pipe</span></div>
+  <div><span class="cell-label">Welds</span><span class="cell-value">${S.welds} · ${S.inch_dia} in-dia</span></div>
+  <div><span class="cell-label">Clash check</span><span class="cell-value">${hard ? `<span class="pill crit">${hard} hard clash${hard > 1 ? "es" : ""}</span>` : `<span class="pill ok">Clear</span>`}</span></div>`;
+
+/* ---------- Model tree ---------- */
+$("line-list").innerHTML = DATA.lines.map((l, i) => `
+  <li class="row">
+    <input type="checkbox" id="show-line-${i}" checked aria-label="Show ${esc(l.number)}">
+    <span class="swatch" style="--sw: var(--l${(i % 6) + 1})"></span>
+    <button type="button" class="row-btn" data-line="${i}">
+      <span class="row-title">${esc(l.number)}</span>
+      <span class="row-meta">NPS ${esc(l.nps)} · ${esc(l.spec)} · ${l.length_m.toFixed(2)} m${l.fluid ? " · " + esc(l.fluid) : ""}</span>
+    </button>
+  </li>`).join("");
+$("equip-list").innerHTML = DATA.equipment.map((e, i) => `
+  <li class="row">
+    <input type="checkbox" id="show-eq-${i}" checked aria-label="Show ${esc(e.tag)}">
+    <span class="swatch"></span>
+    <button type="button" class="row-btn" data-eq="${i}">
+      <span class="row-title">${esc(e.tag)}</span>
+      <span class="row-meta">${esc(e.description || e.kind)}</span>
+    </button>
+  </li>`).join("");
+
+/* ---------- Inspector ---------- */
+function showSummary() {
+  const checks = [
+    ...DATA.checks.problems.map((t) => `<li>${esc(t)}</li>`),
+    ...DATA.checks.warnings.map((t) => `<li>${esc(t)}</li>`),
+  ];
+  $("panel-inspect").innerHTML = `
+    <div><div class="kind">Model summary</div><p class="uid">${esc(P.name)}</p>
+    <p class="desc">${esc(P.plant || "")}</p></div>
+    <div class="stats">
+      <div><b>${S.components}</b><span class="row-meta">components</span></div>
+      <div><b>${S.lines}</b><span class="row-meta">lines</span></div>
+      <div><b>${S.welds}</b><span class="row-meta">butt welds</span></div>
+      <div><b>${S.inch_dia}</b><span class="row-meta">weld inch-dia</span></div>
+    </div>
+    <div style="display:grid;gap:6px"><p class="subhead">Open ends</p>
+      ${DATA.checks.open_ends.length ? `<ul class="checks">${DATA.checks.open_ends.map((o) => `<li><button type="button" class="row-btn" data-uid="${esc(o.uid)}"><span class="row-title">${esc(o.uid)}</span><span class="row-meta">${esc(o.port)} at ${esc(o.at)}</span></button></li>`).join("")}</ul>` : `<p class="note">None. Every port is connected.</p>`}
+    </div>
+    <div style="display:grid;gap:6px"><p class="subhead">Routing and connectivity checks</p>
+      ${checks.length ? `<ul class="checks">${checks.join("")}</ul>` : `<p class="note">No warnings.</p>`}
+    </div>
+    <p class="note">Tap any pipe, fitting, valve or equipment item in the 3D view to inspect it.</p>`;
+}
+
+function showComponent(uid) {
+  const c = byUid.get(uid);
+  if (!c) return showSummary();
+  $("panel-inspect").innerHTML = `
+    <div><div class="kind">${esc(KIND_LABEL[c.kind] || c.kind)}</div><p class="uid">${esc(c.uid)}</p>
+    <p class="desc">${esc(c.description)}</p></div>
+    <dl class="props">${c.display.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
+    ${c.ports.length ? `<div style="display:grid;gap:6px"><p class="subhead">Connection points</p><div class="table-wrap"><table>
+      <thead><tr><th>Port</th><th>End</th><th>Position</th></tr></thead>
+      <tbody>${c.ports.map((p) => `<tr><td class="mono">${esc(p.name)}</td><td class="mono">${esc(p.end)}</td><td class="mono">${esc(p.at)}</td></tr>`).join("")}</tbody>
+    </table></div></div>` : ""}
+    <button type="button" class="row-btn" id="back-summary"><span class="row-meta">← Back to model summary</span></button>`;
+  $("back-summary").addEventListener("click", () => { viewer?.select(null); showSummary(); });
+}
+
+$("panel-clash").innerHTML = DATA.clashes.length
+  ? DATA.clashes.map((c, i) => `
+    <button type="button" class="clash ${c.hard ? "" : "soft"}" data-clash="${i}">
+      <span class="pill ${c.hard ? "crit" : ""}">${c.hard ? "Hard clash" : `Clearance ${c.distance.toFixed(0)} mm`}</span>
+      <span class="clash-pair">${esc(c.a)}<br>↔ ${esc(c.b)}</span>
+      <span class="row-meta">near ${esc(c.at)}</span>
+    </button>`).join("") + `<p class="note">Parts of the same line, and parts within three connections of each other, are not checked against each other.</p>`
+  : `<p class="note">No clashes between lines and equipment.</p>`;
+
+$("panel-mto").innerHTML = `
+  <div class="table-wrap"><table>
+    <thead><tr><th>Item</th><th>NPS</th><th>Qty</th><th>Description</th></tr></thead>
+    <tbody>${DATA.mto.map((r) => `<tr><td>${esc(KIND_LABEL[r.kind] || r.kind)}</td><td class="num">${esc(r.nps)}</td>
+      <td class="num">${r.unit === "m" ? r.qty.toFixed(2) : r.qty.toFixed(0)} ${esc(r.unit)}</td><td>${esc(r.description)}</td></tr>`).join("")}</tbody>
+  </table></div>
+  <p class="note">${S.welds} butt welds, ${S.inch_dia} inch-dia. Pipe weight ${S.pipe_kg.toFixed(0)} kg (plain-end, steel).</p>`;
+
+function setTab(name) {
+  for (const t of ["inspect", "clash", "mto"]) {
+    $(`tab-${t}`).setAttribute("aria-selected", String(t === name));
+    $(`panel-${t}`).hidden = t !== name;
+  }
+}
+document.querySelector(".tabs").addEventListener("click", (e) => { const b = e.target.closest("[data-tab]"); if (b) setTab(b.dataset.tab); });
+$("tab-clash").textContent = `Clashes (${DATA.clashes.length})`;
+
+document.addEventListener("click", (e) => {
+  const u = e.target.closest("[data-uid]");
+  if (u) { setTab("inspect"); showComponent(u.dataset.uid); viewer?.select([u.dataset.uid], true); return; }
+  const l = e.target.closest("[data-line]");
+  if (l) { const line = DATA.lines[+l.dataset.line]; viewer?.select(line.components, true); showLine(line); return; }
+  const q = e.target.closest("[data-eq]");
+  if (q) { const eq = DATA.equipment[+q.dataset.eq]; setTab("inspect"); showComponent(eq.body); viewer?.select(eq.components, true); return; }
+  const c = e.target.closest("[data-clash]");
+  if (c) { const k = DATA.clashes[+c.dataset.clash]; viewer?.select([k.a, k.b], false); viewer?.focusPoint(k.point); }
+});
+
+function showLine(line) {
+  setTab("inspect");
+  $("panel-inspect").innerHTML = `
+    <div><div class="kind">Line</div><p class="uid">${esc(line.number)}</p><p class="desc">${esc(line.fluid)}</p></div>
+    <dl class="props"><dt>Spec</dt><dd>${esc(line.spec)}</dd><dt>NPS</dt><dd>${esc(line.nps)}</dd>
+      <dt>From</dt><dd>${esc(line.from || "open")}</dd><dt>To</dt><dd>${esc(line.to || "open")}</dd>
+      <dt>Pipe</dt><dd>${line.length_m.toFixed(2)} m</dd><dt>Components</dt><dd>${line.components.length}</dd></dl>
+    <div style="display:grid;gap:6px"><p class="subhead">Components in flow order</p><ul class="checks">
+      ${line.components.map((u) => { const c = byUid.get(u); return `<li><button type="button" class="row-btn" data-uid="${esc(u)}"><span class="row-title">${esc(c.tag)} · ${esc(KIND_LABEL[c.kind])}</span><span class="row-meta">${esc(c.display.find((d) => d[0] === "Length")?.[1] || c.description)}</span></button></li>`; }).join("")}
+    </ul></div>
+    <button type="button" class="row-btn" id="back-summary"><span class="row-meta">← Back to model summary</span></button>`;
+  $("back-summary").addEventListener("click", () => { viewer?.select(null); showSummary(); });
+}
+
+showSummary();
+
+/* ---------- 3D engine ---------- */
+async function start3d() {
+  let THREE, OrbitControls;
+  try {
+    THREE = await import("three");
+    ({ OrbitControls } = await import("three/addons/controls/OrbitControls.js"));
+  } catch (err) {
+    const m = $("vp-msg"); m.hidden = false;
+    m.textContent = "The 3D view needs an internet connection to load three.js. The lists, inspector and MTO still work.";
+    return;
+  }
+  const canvas = $("scene"), host = $("viewport");
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(40, 1, 0.05, 5000);
+  camera.up.set(0, 0, 1);
+  const controls = new OrbitControls(camera, canvas);
+  controls.enableDamping = true;
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 1.6));
+  const sun = new THREE.DirectionalLight(0xffffff, 1.6); sun.position.set(30, -45, 60); scene.add(sun);
+
+  const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const V = (p) => new THREE.Vector3(p[0], p[1], p[2]);
+  const UP = new THREE.Vector3(0, 1, 0);
+  const groupMats = new Map();
+  const matFor = (key) => {
+    if (!groupMats.has(key)) groupMats.set(key, new THREE.MeshStandardMaterial({ metalness: 0.35, roughness: 0.5 }));
+    return groupMats.get(key);
+  };
+  const selectMat = new THREE.MeshStandardMaterial({ metalness: 0.2, roughness: 0.4, emissiveIntensity: 0.35 });
+
+  function along(mesh, a, b) {
+    const d = new THREE.Vector3().subVectors(b, a);
+    mesh.position.copy(a).addScaledVector(d, 0.5);
+    mesh.quaternion.setFromUnitVectors(UP, d.clone().normalize());
+  }
+  function buildShape(s, mat) {
+    let mesh;
+    if (s.t === "cyl" || s.t === "fru") {
+      const a = V(s.a), b = V(s.b), len = a.distanceTo(b);
+      const g = s.t === "cyl" ? new THREE.CylinderGeometry(s.r, s.r, len, 28) : new THREE.CylinderGeometry(s.rb, s.ra, len, 28);
+      mesh = new THREE.Mesh(g, mat); along(mesh, a, b);
+    } else if (s.t === "box") {
+      const lo = V(s.lo), hi = V(s.hi), sz = new THREE.Vector3().subVectors(hi, lo);
+      mesh = new THREE.Mesh(new THREE.BoxGeometry(sz.x, sz.y, sz.z), mat);
+      mesh.position.copy(lo).addScaledVector(sz, 0.5);
+    } else if (s.t === "tor") {
+      const curve = new THREE.CatmullRomCurve3(s.pts.map(V), s.closed);
+      mesh = new THREE.Mesh(new THREE.TubeGeometry(curve, s.pts.length * 3, s.r, 16, s.closed), mat);
+    } else if (s.t === "sph") {
+      mesh = new THREE.Mesh(new THREE.SphereGeometry(s.r, 24, 16), mat); mesh.position.copy(V(s.c));
+    }
+    return mesh;
+  }
+
+  const objects = new Map(); // uid -> Group
+  for (const c of DATA.components) {
+    const key = c.line ? `line:${c.line}` : "equip";
+    const g = new THREE.Group(); g.userData.uid = c.uid; g.userData.key = key;
+    for (const s of c.shapes) { const m = buildShape(s, matFor(key)); if (m) { m.userData.uid = c.uid; g.add(m); } }
+    objects.set(c.uid, g); scene.add(g);
+  }
+
+  const grid = new THREE.Group(); scene.add(grid);
+  const marker = new THREE.Group(); scene.add(marker);
+  function buildGrid() {
+    grid.clear();
+    const box = new THREE.Box3();
+    objects.forEach((o) => box.expandByObject(o));
+    const size = Math.ceil(Math.max(box.max.x - box.min.x, box.max.y - box.min.y) + 6);
+    const helper = new THREE.GridHelper(size, size, css("--grid"), css("--grid"));
+    helper.rotation.x = Math.PI / 2;
+    helper.position.set(Math.round((box.min.x + box.max.x) / 2), Math.round((box.min.y + box.max.y) / 2), 0);
+    helper.material.transparent = true; helper.material.opacity = 0.6;
+    grid.add(helper);
+  }
+
+  function applyTheme() {
+    DATA.lines.forEach((l, i) => matFor(`line:${l.number}`).color.set(css(`--l${(i % 6) + 1}`)));
+    matFor("equip").color.set(css("--equip"));
+    selectMat.color.set(css("--select")); selectMat.emissive.set(css("--select"));
+    buildGrid(); paintMarker();
+  }
+
+  let selected = [];
+  function select(uids, frame) {
+    for (const u of selected) objects.get(u)?.traverse((m) => { if (m.isMesh) m.material = matFor(objects.get(u).userData.key); });
+    selected = (uids || []).filter((u) => objects.has(u));
+    for (const u of selected) objects.get(u).traverse((m) => { if (m.isMesh) m.material = selectMat; });
+    if (frame && selected.length) fit(selected.map((u) => objects.get(u)), null);
+  }
+
+  let markerPoint = null;
+  function paintMarker() {
+    marker.clear();
+    if (!markerPoint) return;
+    const mat = new THREE.MeshBasicMaterial({ color: css("--crit"), wireframe: true, depthTest: false, transparent: true, opacity: 0.9 });
+    const s = new THREE.Mesh(new THREE.SphereGeometry(0.35, 16, 10), mat); s.position.copy(V(markerPoint)); s.renderOrder = 10;
+    marker.add(s);
+  }
+  function focusPoint(p) {
+    markerPoint = p; paintMarker();
+    const target = V(p), dir = camera.position.clone().sub(controls.target).normalize();
+    controls.target.copy(target); camera.position.copy(target).addScaledVector(dir, 6); controls.update();
+  }
+
+  const VIEWS = { iso: [1, -1, 0.85], plan: [0, -0.0001, 1], north: [0, -1, 0.0001], west: [1, 0, 0.0001] };
+  let currentDir = VIEWS.iso;
+  function fit(list, dir) {
+    if (dir) currentDir = dir;
+    const box = new THREE.Box3();
+    (list || [...objects.values()].filter((o) => o.visible)).forEach((o) => box.expandByObject(o));
+    if (box.isEmpty()) return;
+    const sphere = box.getBoundingSphere(new THREE.Sphere());
+    const d = Math.max(sphere.radius, 0.5) / Math.sin((camera.fov * Math.PI) / 360) * 1.05;
+    const v = new THREE.Vector3(...(dir || currentDir)).normalize();
+    if (!dir) v.copy(camera.position).sub(controls.target).normalize();
+    controls.target.copy(sphere.center); camera.position.copy(sphere.center).addScaledVector(v, d);
+    controls.update();
+  }
+  document.querySelector(".tools").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-view]"); if (!b) return;
+    const v = b.dataset.view;
+    if (v === "fit") return fit(null, currentDir);
+    document.querySelectorAll(".tools [data-view]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    fit(null, VIEWS[v]);
+  });
+
+  // visibility toggles
+  DATA.lines.forEach((l, i) => $(`show-line-${i}`).addEventListener("change", (e) => l.components.forEach((u) => { const o = objects.get(u); if (o) o.visible = e.target.checked; })));
+  DATA.equipment.forEach((q, i) => $(`show-eq-${i}`).addEventListener("change", (e) => q.components.forEach((u) => { const o = objects.get(u); if (o) o.visible = e.target.checked; })));
+
+  // picking
+  const ray = new THREE.Raycaster(); const ndc = new THREE.Vector2(); let down = null;
+  canvas.addEventListener("pointerdown", (e) => { down = [e.clientX, e.clientY]; });
+  canvas.addEventListener("pointerup", (e) => {
+    if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 5) return;
+    const r = canvas.getBoundingClientRect();
+    ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    ray.setFromCamera(ndc, camera);
+    const hit = ray.intersectObjects([...objects.values()].filter((o) => o.visible), true)[0];
+    if (hit) { setTab("inspect"); select([hit.object.userData.uid], false); showComponent(hit.object.userData.uid); }
+    else { select(null); showSummary(); }
+  });
+
+  function resize() {
+    const w = host.clientWidth, h = host.clientHeight;
+    renderer.setSize(w, h, false); camera.aspect = w / Math.max(h, 1); camera.updateProjectionMatrix();
+  }
+  new ResizeObserver(resize).observe(host);
+  resize();
+  applyTheme();
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme);
+  new MutationObserver(applyTheme).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+  fit(null, VIEWS.iso);
+  if (DATA.clashes.length) { markerPoint = DATA.clashes[0].point; paintMarker(); }
+  renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+  viewer = { select, focusPoint };
+}
+start3d();
+</script>

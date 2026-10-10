@@ -1,0 +1,16 @@
+{
+  "_source": "ASME B16.10 face-to-face dimensions, Class 150 raised-face flanged valves (mm). Development data compiled for PlantForge - verify against your licensed copy of the standard and the valve vendor data before production use.",
+  "rating": "CL150",
+  "types": {
+    "gate": {
+      "1/2": 108, "3/4": 117, "1": 127, "1-1/2": 165, "2": 178, "3": 203, "4": 229, "6": 267,
+      "8": 292, "10": 330, "12": 356, "14": 381, "16": 406, "18": 432, "20": 457, "24": 508
+    },
+    "globe": {
+      "2": 203, "3": 241, "4": 292, "6": 406, "8": 495, "10": 622, "12": 698
+    },
+    "check": {
+      "2": 203, "3": 241, "4": 292, "6": 356, "8": 495, "10": 622, "12": 698
+    }
+  }
+}

@@ -1,0 +1,159 @@
+# PlantForge demo model: a pump discharging into a vertical drum.
+#
+# Units: millimetres. Axes: X = East, Y = North, Z = Elevation.
+# Line 4"-P-1004 is deliberately routed through 4"-P-1001 so the clash check has
+# something to find - lower its rack run (EL 3500 -> EL 3000) to fix it.
+
+[project]
+name = "PlantForge Demo"
+plant = "Demo Plant"
+area = "A-100"
+unit = "U-110 Feed Section"
+
+# --------------------------------------------------------------------------
+# Equipment: simple primitives (box / cylinder) + flanged nozzles.
+# A nozzle position is its flange face; direction points out of the equipment.
+# --------------------------------------------------------------------------
+
+[[equipment]]
+tag = "P-101A"
+kind = "pump"
+description = "Feed pump, end-suction centrifugal"
+
+  [[equipment.shapes]]   # baseplate
+  type = "box"
+  min = [0, -400, 0]
+  max = [2200, 400, 250]
+
+  [[equipment.shapes]]   # casing
+  type = "cylinder"
+  a = [300, 0, 650]
+  b = [700, 0, 650]
+  diameter = 800
+
+  [[equipment.shapes]]   # motor
+  type = "cylinder"
+  a = [1100, 0, 650]
+  b = [2100, 0, 650]
+  diameter = 500
+
+  [[equipment.nozzles]]  # suction
+  name = "N1"
+  nps = "6"
+  position = [100, 0, 650]
+  direction = [-1, 0, 0]
+  projection = 200
+
+  [[equipment.nozzles]]  # discharge
+  name = "N2"
+  nps = "4"
+  position = [500, 0, 1250]
+  direction = [0, 0, 1]
+  projection = 200
+
+[[equipment]]
+tag = "V-101"
+kind = "vessel"
+description = "Feed surge drum, 2000 ID x 6000 T/T"
+
+  [[equipment.shapes]]
+  type = "cylinder"
+  a = [6000, 4000, 0]
+  b = [6000, 4000, 7000]
+  diameter = 2000
+
+  [[equipment.nozzles]]  # inlet
+  name = "N1"
+  nps = "4"
+  position = [4800, 4000, 5000]
+  direction = [-1, 0, 0]
+  projection = 200
+
+  [[equipment.nozzles]]  # outlet
+  name = "N2"
+  nps = "6"
+  position = [6000, 2800, 1500]
+  direction = [0, -1, 0]
+  projection = 200
+
+# --------------------------------------------------------------------------
+# Lines: centre-line points; elbows, flanges, gaskets and pipe are generated
+# from the spec. "from"/"to" connect to nozzles (point added automatically) or
+# start at a tee branch ("tee:<id>"). Inline items sit on a leg (0-based) at a
+# station = distance from the leg start to the item centre.
+# --------------------------------------------------------------------------
+
+[[lines]]
+number = '4"-P-1001-A1A'
+spec = "A1A"
+nps = "4"
+fluid = "Process feed"
+from = "P-101A/N2"
+to = "V-101/N1"
+points = [
+  [500, 0, 3500],
+  [500, 4000, 3500],
+  [3000, 4000, 3500],
+  [3000, 4000, 5000],
+]
+  [[lines.inline]]
+  type = "check"
+  leg = 0
+  station = 600
+  [[lines.inline]]
+  type = "gate"
+  leg = 0
+  station = 1300
+  [[lines.inline]]
+  type = "tee"
+  id = "T1"
+  leg = 1
+  station = 2000
+  branch = [1, 0, 0]
+
+[[lines]]
+number = '4"-P-1002-A1A'
+spec = "A1A"
+nps = "4"
+fluid = "Process feed (spill-back)"
+from = "tee:T1"
+end = "flanged"
+points = [
+  [2000, 2000, 3500],
+  [2500, 2500, 3500],
+  [2500, 3200, 3500],
+]
+  [[lines.inline]]
+  type = "gate"
+  leg = 0
+  station = 600
+
+[[lines]]
+number = '6"-P-1003-A1A'
+spec = "A1A"
+nps = "6"
+fluid = "Pump suction"
+from = "P-101A/N1"
+end = "flanged"
+points = [
+  [-1500, 0, 650],
+  [-1500, 0, 2500],
+  [-1500, -3000, 2500],
+]
+  [[lines.inline]]
+  type = "gate"
+  leg = 0
+  station = 700
+
+[[lines]]
+number = '6"-P-1004-A1A'
+spec = "A1A"
+nps = "6"
+fluid = "Drum outlet"
+from = "V-101/N2"
+end = "flanged"
+points = [
+  [6000, 1000, 1500],
+  [6000, 1000, 3500],
+  [-1000, 1000, 3500],
+]

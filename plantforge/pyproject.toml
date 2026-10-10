@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "plantforge"
+version = "0.1.0"
+description = "Open-source, spec-driven plant & piping design engine (SP3D-style workflow)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+ifc = ["ifcopenshell>=0.8"]
+iso = ["ezdxf>=1.1"]
+dev = ["pytest>=8"]
+all = ["ifcopenshell>=0.8", "ezdxf>=1.1", "pytest>=8"]
+
+[project.scripts]
+plantforge = "plantforge.__main__:main"
+
+[tool.setuptools]
+packages = ["plantforge", "plantforge.export"]
+
+[tool.setuptools.package-data]
+plantforge = ["data/*.json", "specs/*.toml", "export/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

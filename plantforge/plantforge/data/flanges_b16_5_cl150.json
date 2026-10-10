@@ -1,0 +1,23 @@
+{
+  "_source": "ASME B16.5 Class 150 weld-neck raised-face flanges (mm). o = flange OD, tf = flange thickness and y = length through hub, both EXCLUDING the raised face (B16.5 current editions); rf_height = raised face height; rf_dia = raised face OD; hub_dia = hub OD at base (X); bc = bolt circle; bolts = number of stud bolts; bolt_dia = stud diameter (inch). Development data compiled for PlantForge - verify against your licensed copy of the standard before production use.",
+  "rating": "CL150",
+  "rf_height": 1.6,
+  "sizes": {
+    "1/2":   {"o": 90,  "tf": 9.6,  "y": 46,  "rf_dia": 34.9,  "hub_dia": 30,  "bc": 60.3,  "bolts": 4,  "bolt_dia": "1/2"},
+    "3/4":   {"o": 100, "tf": 11.2, "y": 51,  "rf_dia": 42.9,  "hub_dia": 38,  "bc": 69.9,  "bolts": 4,  "bolt_dia": "1/2"},
+    "1":     {"o": 110, "tf": 12.7, "y": 54,  "rf_dia": 50.8,  "hub_dia": 49,  "bc": 79.4,  "bolts": 4,  "bolt_dia": "1/2"},
+    "1-1/2": {"o": 125, "tf": 15.9, "y": 60,  "rf_dia": 73.0,  "hub_dia": 65,  "bc": 98.4,  "bolts": 4,  "bolt_dia": "1/2"},
+    "2":     {"o": 150, "tf": 17.5, "y": 62,  "rf_dia": 92.1,  "hub_dia": 78,  "bc": 120.7, "bolts": 4,  "bolt_dia": "5/8"},
+    "3":     {"o": 190, "tf": 22.3, "y": 68,  "rf_dia": 127.0, "hub_dia": 108, "bc": 152.4, "bolts": 4,  "bolt_dia": "5/8"},
+    "4":     {"o": 230, "tf": 22.3, "y": 75,  "rf_dia": 157.2, "hub_dia": 135, "bc": 190.5, "bolts": 8,  "bolt_dia": "5/8"},
+    "6":     {"o": 280, "tf": 23.9, "y": 87,  "rf_dia": 215.9, "hub_dia": 192, "bc": 241.3, "bolts": 8,  "bolt_dia": "3/4"},
+    "8":     {"o": 345, "tf": 27.0, "y": 100, "rf_dia": 269.9, "hub_dia": 246, "bc": 298.5, "bolts": 8,  "bolt_dia": "3/4"},
+    "10":    {"o": 405, "tf": 28.6, "y": 100, "rf_dia": 323.8, "hub_dia": 305, "bc": 362.0, "bolts": 12, "bolt_dia": "7/8"},
+    "12":    {"o": 485, "tf": 30.2, "y": 113, "rf_dia": 381.0, "hub_dia": 365, "bc": 431.8, "bolts": 12, "bolt_dia": "7/8"},
+    "14":    {"o": 535, "tf": 33.4, "y": 125, "rf_dia": 412.8, "hub_dia": 400, "bc": 476.3, "bolts": 12, "bolt_dia": "1"},
+    "16":    {"o": 595, "tf": 35.0, "y": 125, "rf_dia": 469.9, "hub_dia": 457, "bc": 539.8, "bolts": 16, "bolt_dia": "1"},
+    "18":    {"o": 635, "tf": 38.1, "y": 138, "rf_dia": 533.4, "hub_dia": 505, "bc": 577.9, "bolts": 16, "bolt_dia": "1-1/8"},
+    "20":    {"o": 700, "tf": 41.3, "y": 143, "rf_dia": 584.2, "hub_dia": 559, "bc": 635.0, "bolts": 20, "bolt_dia": "1-1/8"},
+    "24":    {"o": 815, "tf": 46.1, "y": 151, "rf_dia": 692.2, "hub_dia": 663, "bc": 749.3, "bolts": 20, "bolt_dia": "1-1/4"}
+  }
+}
