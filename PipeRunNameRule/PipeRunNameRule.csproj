@@ -1,18 +1,19 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net48</TargetFramework>
+    <!-- The delivered PipingNameRules.dll targets .NET Framework 4.5 -->
+    <TargetFramework>net45</TargetFramework>
     <RootNamespace>Protofile.Sp3d</RootNamespace>
     <AssemblyName>PipeRunNameRule</AssemblyName>
+    <!-- Folder that holds CommonMiddle.dll on your machine. Change this path. -->
+    <SP3DAssemblies Condition="'$(SP3DAssemblies)' == ''">C:\Program Files (x86)\Smart3D\Core\Container\Bin\Assemblies\Release</SP3DAssemblies>
   </PropertyGroup>
 
-  <!--
-    TODO: add references to your SP3D assemblies once the adapter is written, e.g.
-    <Reference Include="Ingr.SP3D.Common.Middle">
-      <HintPath>C:\Program Files (x86)\Smart3D\Core\Container\Bin\Assemblies\Release\Ingr.SP3D.Common.Middle.dll</HintPath>
+  <ItemGroup>
+    <Reference Include="CommonMiddle">
+      <HintPath>$(SP3DAssemblies)\CommonMiddle.dll</HintPath>
       <Private>False</Private>
     </Reference>
-    Check the exact assembly names and path in your SP3D installation.
-  -->
+  </ItemGroup>
 
 </Project>

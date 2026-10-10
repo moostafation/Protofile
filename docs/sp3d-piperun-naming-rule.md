@@ -60,12 +60,13 @@ Every run in a pipeline can then be traced to its line number from the name alon
 
 The rule is written in code, built into a DLL, then added to the project.
 
-1. The naming logic is in `PipeRunNameRule/PipeRunNameRule.cs`. It is a draft and has not been compiled or tested.
-   - `PipeRunNaming.Build` has no SP3D dependency, so it can be unit tested alone.
-   - The SP3D adapter is only a TODO. It has to be written against your SP3D version's naming rule API.
-2. Open `Protofile.sln` in Visual Studio, run the tests, then build the DLL.
-3. Register the rule in the Catalog (bulkload, Naming Rules sheet) and assign it to the `PipeRun` class.
-4. Test with two pipelines and several runs each before using it on a live model.
+1. `PipeRunNameRule/PipeRunNameRule.cs` has the naming logic (`PipeRunNaming.Build`, no SP3D dependency, unit tested).
+2. `PipeRunNameRule/Sp3dPipeRunNameRule.cs` is the SP3D adapter. It derives from `NameRuleBase`, with the same two overrides as the delivered `PipingNameRules.dll`. It has not been compiled against SP3D, and the lines marked `VERIFY` may need fixing.
+3. In `PipeRunNameRule.csproj`, set `SP3DAssemblies` to the folder that holds `CommonMiddle.dll`.
+4. Open `Protofile.sln` in Visual Studio, run the tests, build the DLL.
+5. Put the DLL next to the delivered rule DLLs (e.g. `PipingNameRules.dll`) in SharedContent.
+6. Register it in the Catalog Naming Rules sheet. Copy the ProgID format from the row of a delivered rule that uses `PipingNameRules.dll`, and replace the names with the assembly `PipeRunNameRule` and the class `Protofile.Sp3d.PipeRunNameRule`. Then assign it to the `PipeRun` class.
+7. Test with two pipelines and several runs each before using it on a live model.
 
 ## Open items to confirm
 
