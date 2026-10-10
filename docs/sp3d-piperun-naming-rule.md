@@ -58,10 +58,14 @@ Every run in a pipeline can then be traced to its line number from the name alon
 
 ## Implementing in SP3D
 
-1. In the Catalog, open the naming rule for the Pipe Run class (`PipeRun`).
-2. Set the rule to concatenate the parent pipeline name, `-R` and a two-digit counter.
-3. Make sure pipeline names are generated or entered before any run is placed.
-4. Test with two pipelines and several runs each before using the rule on a live model.
+The rule is written in code, built into a DLL, then added to the project.
+
+1. The naming logic is in `src/PipeRunNameRule.cs`. It is a draft and has not been compiled or tested.
+   - `PipeRunNaming.Build` has no SP3D dependency, so it can be unit tested alone.
+   - The SP3D adapter is only a TODO. It has to be written against your SP3D version's naming rule API.
+2. Build the DLL.
+3. Register the rule in the Catalog (bulkload, Naming Rules sheet) and assign it to the `PipeRun` class.
+4. Test with two pipelines and several runs each before using it on a live model.
 
 ## Open items to confirm
 
