@@ -1,0 +1,58 @@
+// Line icons drawn for PlantForge (24px grid, currentColor strokes).
+
+const P: Record<string, string> = {
+  select: "M5 3l13 7-6 1.6L9.5 18z",
+  move: "M12 3v18M3 12h18M12 3l-2.5 2.5M12 3l2.5 2.5M12 21l-2.5-2.5M12 21l2.5-2.5M3 12l2.5-2.5M3 12l2.5 2.5M21 12l-2.5-2.5M21 12l-2.5 2.5",
+  measure: "M3 17L17 3l4 4L7 21zM7 13l2 2M10 10l2 2M13 7l2 2",
+  undo: "M9 7H4V2M4 7c2-3 5-4 8-4a8 8 0 010 16H7",
+  redo: "M15 7h5V2M20 7c-2-3-5-4-8-4a8 8 0 000 16h5",
+  fit: "M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5M8 8h8v8H8z",
+  iso: "M12 3l8 4.5v9L12 21l-8-4.5v-9zM12 12l8-4.5M12 12v9M12 12L4 7.5",
+  plan: "M4 4h16v16H4zM4 12h16M12 4v16",
+  section: "M4 8l8-4 8 4v8l-8 4-8-4zM2 13h20",
+  labels: "M4 6h10l4 4-4 4H4zM7 10h4",
+  trash: "M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13",
+  pump: "M4 17h16M7 17v-3M17 17v-3M9 11a3 3 0 106 0 3 3 0 10-6 0M15 11h5M12 8V4h3",
+  vvessel: "M8 6a4 3 0 018 0v12a4 3 0 01-8 0zM6 21h12",
+  hdrum: "M6 8h12a3 4 0 010 8H6a3 4 0 010-8zM8 16v4M16 16v4",
+  exchanger: "M3 9h4v6H3zM7 8h12a2 4 0 010 8H7zM10 8V5M15 16v3",
+  tank: "M5 8l7-3 7 3v11H5zM5 8h14",
+  nozzle: "M4 12h9M13 8v8M15 9v6M17 12h3",
+  rotate: "M20 11a8 8 0 10-2.3 5.7M20 4v7h-7",
+  route: "M4 20v-8h8V4h8M4 20l-2-2M4 20l2-2",
+  connect: "M5 18a2 2 0 100-4 2 2 0 100 4zM19 10a2 2 0 100-4 2 2 0 100 4zM7 16h6V8h4",
+  reroute: "M4 18h5V9h7M13 6l3 3-3 3M20 18h-5",
+  gate: "M3 12h3M18 12h3M6 8l12 8V8L6 16zM12 12V4M9 4h6",
+  globe: "M3 12h3M18 12h3M6 8l12 8V8L6 16zM12 9a3 3 0 100 6 3 3 0 100-6zM12 9V4",
+  check: "M3 12h3M18 12h3M6 8l12 8V8L6 16zM9 12l4-2v4z",
+  tee: "M3 15h18M12 15V4M9 7l3-3 3 3",
+  rack: "M5 21V5M19 21V5M5 9h14M5 14h14M3 5h18",
+  clash: "M12 3l9 16H3zM12 10v4M12 17h.01",
+  todo: "M9 6h11M9 12h11M9 18h11M4 6l1 1 2-2M4 12l1 1 2-2M4 18h2",
+  mto: "M5 3h10l4 4v14H5zM15 3v4h4M8 12h8M8 16h8M8 8h4",
+  lines: "M4 6h16M4 12h16M4 18h10",
+  iso_dwg: "M4 4h16v16H4zM7 16l4-6 3 3 3-5",
+  download: "M12 4v11M7 10l5 5 5-5M5 20h14",
+  upload: "M12 20V9M7 14l5-5 5 5M5 4h14",
+  camera: "M4 8h4l2-3h4l2 3h4v11H4zM12 11a3 3 0 100 6 3 3 0 100-6z",
+  folder: "M3 7h7l2 2h9v10H3z",
+  save: "M5 3h11l3 3v15H5zM8 3v6h7V3M8 21v-7h8v7",
+  spark: "M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2z",
+  help: "M12 21a9 9 0 100-18 9 9 0 100 18zM9.5 9a2.5 2.5 0 015 .5c0 2-2.5 2-2.5 4M12 17h.01",
+  close: "M6 6l12 12M18 6L6 18",
+  tick: "M5 12.5l4.5 4.5L19 7",
+  chevron: "M9 6l6 6-6 6",
+  plus: "M12 5v14M5 12h14",
+  stop: "M7 7h10v10H7z",
+  send: "M4 12l16-8-6 16-2-7z",
+  copy: "M8 8h11v12H8zM5 16V4h11",
+  eye: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 100 6 3 3 0 100-6z",
+};
+
+export function Icon({ name, size = 18, className }: { name: keyof typeof P | string; size?: number; className?: string }) {
+  return (
+    <svg className={className} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d={P[name] ?? P.help} />
+    </svg>
+  );
+}

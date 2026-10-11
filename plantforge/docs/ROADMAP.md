@@ -83,7 +83,9 @@ flowchart TB
 
 ## 4. القرار المهم: Desktop ولا Web؟
 
-**التوصية:** نكمّل النواة Python زي ما هي، والواجهة التفاعلية الأولى تبقى **FreeCAD Workbench**.
+**اللي حصل فعلاً:** الواجهة التفاعلية الأولى اتعملت **على الويب (PlantForge Studio)**، عشان تفتح على أي جهاز من غير تثبيت. المحرك اتنقل لـ TypeScript، وبيستخدم نفس ملفات الكتالوج والـ Spec بتاعة Python. لسه FreeCAD Workbench اختيار قوي لنسخة Desktop تشتغل على OCCT B-rep.
+
+**التوصية الأصلية:** نكمّل النواة Python زي ما هي، والواجهة التفاعلية الأولى تبقى **FreeCAD Workbench**.
 
 - FreeCAD بيدينا Geometry kernel (OCCT)، و 3D view، واختيار، و Undo/Redo، وحفظ ملفات، ومحرر خصائص، ورسومات (TechDraw)، و STEP و IFC ببلاش. ده شغل سنين لو بنيناه من الصفر.
 - النواة Python، فتتحط جوه FreeCAD مباشرة من غير إعادة كتابة.
@@ -98,6 +100,7 @@ flowchart TB
 | المرحلة | المحتوى | الناتج |
 |---|---|---|
 | **0 (تمت)** | النواة: كتالوج و Spec و Routing و Connectivity و Clash و MTO و PCF و IFC وأيزومتريك و Viewer | `plantforge build` على موديل نصي |
+| **2 (بدأت): PlantForge Studio** | واجهة تفاعلية على الويب (three.js): Route بالماوس، و Auto-routing بيتجنب الـ Clash ويفضّل الـ Rack، ومعدات بارامترية، و Racks مع Shoes تلقائي، وتحريك مع Stretch، و Clash لحظي، و To-Do list، وأيزومتريك، ومساعد AI، وحفظ في الحساب | برنامج تفاعلي شغّال: `studio/` |
 | **1: البيانات والقواعد** (1-2 شهر) | Class 300 و 600، و Reducers (Concentric و Eccentric)، و Small-bore SW و Threaded، و Olets و Branch tables، وكتالوج في SQLite، ومحرر Spec، ووحدات inch/mm، وحفظ الموديل المحسوب | Spec حقيقي لشركة يتعمل فيه موديل كامل |
 | **2: الواجهة التفاعلية** (2-4 شهور) | FreeCAD Workbench: Route بالماوس من نوزل لنوزل، وإدخال بلف و Tee، وتعديل نقطة، و Undo، و Clash أثناء الرسم، و Templates للمعدات | المصمم يرسم بنفسه من غير ما يكتب ملفات |
 | **3: المخرجات** (2-3 شهور) | أيزومتريك بمستوى إنتاج (Spools وترقيم لحامات و Cut lists)، و Plans و Sections، وتقارير Excel، واستيراد PCF | رسومات تتسلّم للموقع |

@@ -1,5 +1,8 @@
 # PlantForge
 
+> **جديد: [PlantForge Studio](studio/README.md)** - البرنامج التفاعلي ثلاثي الأبعاد: رسم المواسير بالماوس، و Auto-routing، و Clash لحظي، وأيزومتريك، ومساعد ذكاء اصطناعي.
+> افتح `studio/release/plantforge-studio.html` في المتصفح.
+
 **محرك مفتوح المصدر لتصميم المصانع والأنابيب، شغله ماشي بالـ Spec (Spec-driven)، على طريقة SP3D و E3D.**
 
 ده الإصدار 0.1: نواة البرنامج (Engine). بيقرا موديل المصنع من ملف نصي، ويعمل Routing للخطوط
