@@ -19,6 +19,7 @@ export interface Hit {
 export const LINE_COLORS = ["#3a78c4", "#2f9a63", "#b5602f", "#16999a", "#8a5cc4", "#c4507a", "#8f9a2e", "#d18a12"];
 const EQUIP_COLORS: Record<string, string> = { pump: "#5d8db0", vvessel: "#c6cfd6", hdrum: "#c6cfd6", exchanger: "#a9bccb", tank: "#d4dbe0" };
 const STEEL = "#c39a3a";
+const STATUS_COLORS: Record<string, string> = { Working: "#9aa6b0", "In Review": "#e0a21a", Approved: "#2f9e5f", Rejected: "#d6453d" };
 const SUPPORT = "#6f7b85";
 
 export type ViewName = "iso" | "iso-sw" | "iso-nw" | "plan" | "north" | "south" | "east" | "west";
@@ -156,7 +157,22 @@ export class Viewer {
     return m;
   }
 
+  colorBy: "line" | "status" = "line";
+
+  setColorBy(mode: "line" | "status", model: Model) {
+    if (mode === this.colorBy) return;
+    this.colorBy = mode;
+    for (const rec of this.owners.values()) rec.sig = "";
+    this.setModel(model);
+  }
+
   private materialFor(c: Comp, model: Model): THREE.Material {
+    if (this.colorBy === "status") {
+      const list = c.owner.type === "equipment" ? model.doc.equipment : c.owner.type === "line" ? model.doc.lines : model.doc.structures;
+      const status = (list as { id: string; meta?: { status: string } }[]).find((o) => o.id === c.owner.id)?.meta?.status ?? "Working";
+      const col = STATUS_COLORS[status] ?? STATUS_COLORS.Working;
+      return this.mat(`status:${status}`, col, { metalness: 0.25, roughness: 0.5 });
+    }
     if (c.owner.type === "structure") return this.mat("steel", STEEL, { metalness: 0.25, roughness: 0.6 });
     if (c.owner.type === "equipment") {
       const t = model.equipment.get(c.owner.id)?.doc.template ?? "vvessel";
@@ -189,7 +205,10 @@ export class Viewer {
     }
     for (const [k, comps] of byOwner) {
       const line = comps[0].owner.type === "line" ? model.lines.get(comps[0].owner.id) : undefined;
-      const sig = JSON.stringify(comps.map((c) => [c.uid, c.shapes])) + (line ? `|${line.doc.color}` : "");
+      const owner = comps[0].owner;
+      const list = owner.type === "equipment" ? model.doc.equipment : owner.type === "line" ? model.doc.lines : model.doc.structures;
+      const status = this.colorBy === "status" ? ((list as { id: string; meta?: { status: string } }[]).find((o) => o.id === owner.id)?.meta?.status ?? "") : "";
+      const sig = JSON.stringify(comps.map((c) => [c.uid, c.shapes])) + (line ? `|${line.doc.color}` : "") + `|${status}`;
       const rec = this.owners.get(k);
       if (rec && rec.sig === sig) continue;
       if (rec) this.disposeGroup(rec.group);

@@ -1,6 +1,9 @@
 // Optional platform capabilities (claude.ai artifact runtime). Every feature degrades gracefully when absent.
 
 import type { PlantDoc } from "../engine/doc";
+import type { User } from "../engine/meta";
+import type { DbState } from "../db/PlantDB";
+import { rememberPerson } from "./people";
 
 type AnyCap = any; // eslint-disable-line @typescript-eslint/no-explicit-any
 
@@ -58,8 +61,8 @@ export interface ProjectMeta {
 
 export interface Cloud {
   list(): Promise<ProjectMeta[]>;
-  save(id: string, doc: PlantDoc): Promise<void>;
-  load(id: string): Promise<PlantDoc | null>;
+  save(id: string, state: DbState): Promise<void>;
+  load(id: string): Promise<DbState | { doc: PlantDoc } | null>;
   remove(id: string): Promise<void>;
 }
 
@@ -84,12 +87,18 @@ export function cloud(): Promise<Cloud | null> {
           })
           .sort((a: ProjectMeta, b: ProjectMeta) => b.updatedAt - a.updatedAt);
       },
-      async save(id, doc) {
-        await col.doc(id).set({ name: doc.project.name, updatedAt: Date.now(), equipment: doc.equipment.length, lines: doc.lines.length, doc: JSON.parse(JSON.stringify(doc)) });
+      async save(id, state) {
+        const doc = state.doc;
+        let st: DbState = JSON.parse(JSON.stringify(state));
+        // a document holds at most 256 KiB: keep the newest audit entries that fit
+        while (JSON.stringify(st).length > 240_000 && (st.txns?.length ?? 0) > 20) st = { ...st, txns: st.txns!.slice(Math.floor(st.txns!.length / 2)) };
+        await col.doc(id).set({ name: doc.project.name, updatedAt: Date.now(), equipment: doc.equipment.length, lines: doc.lines.length, state: st });
       },
       async load(id) {
         const d = await col.doc(id).get();
-        return d.exists ? (d.data().doc as PlantDoc) : null;
+        if (!d.exists) return null;
+        const x = d.data();
+        return (x.state as DbState) ?? (x.doc ? { doc: x.doc as PlantDoc } : null);
       },
       async remove(id) {
         await col.doc(id).delete();
@@ -124,4 +133,18 @@ export function loadDraft(): { doc: PlantDoc; projectId: string | null } | null 
 
 export async function sampleFn(): Promise<AnyCap | null> {
   return cap("sample");
+}
+
+/** Who is working: the signed-in Claude user (editors may approve), or a local user outside Claude. */
+export async function currentUser(): Promise<User> {
+  const u = await cap("user");
+  if (!u) return { id: "local", name: "Local user", canApprove: true };
+  try {
+    const me = await u.me();
+    const user = { id: me.id ?? "anon", name: me.name || "You", canApprove: !!(me.canEdit || me.isOwner) };
+    rememberPerson(user.id, user.name);
+    return user;
+  } catch {
+    return { id: "anon", name: "You", canApprove: false };
+  }
 }

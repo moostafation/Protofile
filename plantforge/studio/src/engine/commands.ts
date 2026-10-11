@@ -4,6 +4,7 @@ import { autoRoute } from "./autoroute";
 import { normalizeNps } from "./catalog";
 import { Model, computeModel, linePath, resolveEnd } from "./compute";
 import type { EndRef, EquipmentDoc, LineDoc, NozzleDoc, PlantDoc, StructureDoc, TemplateId } from "./doc";
+import { nextId } from "./doc";
 import { TEMPLATES } from "./equipment";
 import { InlineItem } from "./routing";
 import { getSpec } from "./spec";
@@ -13,8 +14,10 @@ export type ObjRef = { type: "equipment" | "line" | "structure"; id: string };
 
 const clone = <T>(x: T): T => structuredClone(x);
 
-function bumpSeq(doc: PlantDoc): [number, PlantDoc] {
-  return [doc.seq, { ...doc, seq: doc.seq + 1 }];
+/** The next id number, plus this session's suffix in a shared plant ("12", or "12-k3f9"). */
+function bumpSeq(doc: PlantDoc): [string, PlantDoc] {
+  const [id, next] = nextId(doc, "");
+  return [id, next];
 }
 
 export function nextTag(doc: PlantDoc, prefix: string): string {

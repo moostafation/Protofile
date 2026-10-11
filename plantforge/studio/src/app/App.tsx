@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { deleteObject } from "../engine/commands";
 import { demoDoc } from "../engine/demo";
-import { cloud, loadDraft, sampleFn, saveDraft } from "../platform/claude";
+import { dbHub, installDatabaseSync, restoreOrCreate, schedulePersist } from "../db/service";
+import { installSharedSync, joinShared } from "../db/shared";
+import { cloud, currentUser, loadDraft, sampleFn } from "../platform/claude";
+import { DatabaseManager } from "./DatabaseManager";
 import { Assistant } from "./Assistant";
 import { CommandBar, Help, IsoView, Projects, Toasts, TopBar } from "./Chrome";
 import { Explorer } from "./Explorer";
@@ -18,52 +21,65 @@ export function App() {
   const assistantOpen = useStore((s) => s.assistantOpen);
   const projectsOpen = useStore((s) => s.projectsOpen);
   const helpOpen = useStore((s) => s.helpOpen);
+  const dbOpen = useStore((s) => s.dbOpen);
   const [ready, setReady] = useState(false);
-  const [projectId, setProjectId] = useState<string | null>(null);
+  const [projectId, setProjectIdState] = useState<string | null>(null);
   const [assistant, setAssistant] = useState(false);
+  const setProjectId = (id: string | null) => {
+    dbHub.projectId = id;
+    setProjectIdState(id);
+    schedulePersist();
+  };
 
-  // first load: the last draft in this browser, else the demo unit
+  // first load: the plant database kept in this browser, else the demo unit
   useEffect(() => {
-    const draft = loadDraft();
-    const st = useStore.getState();
-    if (draft) {
-      st.load(draft.doc, "Restored your last session");
-      setProjectId(draft.projectId);
-    } else st.load(demoDoc(), "Demo unit");
-    st.logLine("PlantForge Studio ready. Type HELP for commands.");
-    setReady(true);
-    sampleFn().then((s) => setAssistant(!!s));
-  }, []);
-
-  // keep a draft in this browser (per-viewer convenience; the account copy is saved explicitly)
-  useEffect(() => {
-    let t = 0;
-    return useStore.subscribe((s, p) => {
-      if (s.doc === p.doc) return;
-      clearTimeout(t);
-      t = window.setTimeout(() => saveDraft(s.doc, projectId), 700);
+    (async () => {
+      installDatabaseSync();
+      installSharedSync();
+      const st = useStore.getState();
+      st.set({ user: await currentUser() });
+      const draft = loadDraft(); // documents saved by earlier versions (localStorage)
+      const { sharedPid } = await restoreOrCreate(() => draft?.doc ?? demoDoc());
+      performance.mark("plantforge:db-ready");
+      if (sharedPid) {
+        // back into the shared plant this browser was working on, with everyone's latest changes
+        joinShared(sharedPid).catch((e) => st.toast(`Working on a local copy: ${(e as Error).message}`, "info"));
+      }
+      setProjectIdState(dbHub.projectId);
+      st.logLine("PlantForge Studio ready. Type HELP for commands.");
+      setReady(true);
+      sampleFn().then((s) => setAssistant(!!s));
+    })().catch((e) => {
+      console.error(e);
+      useStore.getState().toast(`Could not start the plant database: ${(e as Error).message}`, "error");
     });
-  }, [projectId]);
+  }, []);
 
   const save = useCallback(async () => {
     const st = useStore.getState();
+    const db = dbHub.db;
+    if (!db) return;
+    if (st.shared) {
+      st.set({ dirty: false });
+      st.toast(st.shared.status === "readonly" ? "This shared plant is view only for you." : "Shared plant: every change is saved for everyone as you work.", "info");
+      return;
+    }
     const c = await cloud();
     if (!c) {
-      saveDraft(st.doc, projectId);
+      schedulePersist();
       st.set({ dirty: false });
-      st.toast("Saved in this browser. Open the page in Claude to save to your account.", "info");
+      st.toast("Saved in this browser. Open the page in Claude to save the database to your account.", "info");
       return;
     }
     const id = projectId ?? `${slug(st.doc.project.name)}-${Date.now().toString(36)}`;
     try {
-      await c.save(id, st.doc);
+      await c.save(id, db.exportState());
       setProjectId(id);
       st.set({ dirty: false, savedAt: Date.now() });
       st.toast(`Saved “${st.doc.project.name}” to your account`);
     } catch (e) {
       const code = (e as { code?: string }).code;
       st.toast(code === "quota_exceeded" ? "Your project storage is full - delete an old project in Projects." : "Could not save right now. Your work is kept in this browser.", "error");
-      saveDraft(st.doc, projectId);
     }
   }, [projectId]);
 
@@ -74,7 +90,7 @@ export function App() {
       const typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
       const st = useStore.getState();
       if (typing && ev.key !== "Escape") return;
-      if (st.isoLine || st.projectsOpen || st.helpOpen) return;
+      if (st.isoLine || st.projectsOpen || st.helpOpen || st.dbOpen) return;
       if (hub.tool?.key?.(ev)) return ev.preventDefault();
       const mod = ev.ctrlKey || ev.metaKey;
       if (mod && ev.key.toLowerCase() === "z") {
@@ -114,6 +130,7 @@ export function App() {
       {isoLine && <IsoView />}
       {projectsOpen && <Projects projectId={projectId} setProjectId={setProjectId} onSave={save} />}
       {helpOpen && <Help />}
+      {dbOpen && <DatabaseManager />}
       <Toasts />
     </div>
   );

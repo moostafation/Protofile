@@ -2,13 +2,15 @@ import { useState } from "react";
 import { addNozzle, deleteObject, moveEquipment, reroute } from "../engine/commands";
 import type { TemplateId } from "../engine/doc";
 import { TEMPLATES } from "../engine/equipment";
+import type { ApprovalStatus } from "../engine/doc";
+import { ApprovalError, setMeta } from "../engine/meta";
 import { SPECS, specApi } from "../engine/spec";
 import { exportCurrent } from "./exporters";
 import { hub } from "./hub";
 import { Icon } from "./icons";
 import { ToolId, useStore } from "./store";
 
-type Tab = "home" | "equipment" | "piping" | "structure" | "review" | "drawings";
+type Tab = "home" | "equipment" | "piping" | "structure" | "review" | "database" | "drawings";
 
 const TABS: [Tab, string][] = [
   ["home", "Home"],
@@ -16,6 +18,7 @@ const TABS: [Tab, string][] = [
   ["piping", "Piping"],
   ["structure", "Structure"],
   ["review", "Review"],
+  ["database", "Database"],
   ["drawings", "Drawings & Export"],
 ];
 
@@ -44,6 +47,19 @@ export function Ribbon() {
   const focusLine = s.focus?.type === "line" ? s.doc.lines.find((l) => l.id === s.focus!.id) : undefined;
   const sizes = specApi.sizes(SPECS[s.newLine.spec] ?? SPECS.A1A);
   const hard = (s.model.clashes ?? []).filter((c) => c.hard).length;
+
+  // objects behind the current selection (several when picked in the viewer with Ctrl)
+  const owners = [...new Set([...s.selection.map((u) => s.model.byUid.get(u)?.owner.id), s.focus?.id].filter((x): x is string => !!x))];
+  const setStatus = (status: ApprovalStatus) => {
+    if (!owners.length) return s.toast("Select objects first", "error");
+    try {
+      if (s.apply(setMeta(s.doc, owners, { status }, s.user), `Set status ${status} (${owners.length} object${owners.length > 1 ? "s" : ""})`)) s.toast(`${status}: ${owners.length} object${owners.length > 1 ? "s" : ""}`);
+    } catch (e) {
+      if (e instanceof ApprovalError) s.toast(e.message, "error");
+      else throw e;
+    }
+  };
+  const openDb = (page: typeof s.dbPage) => s.set({ dbOpen: true, dbPage: page });
 
   const del = () => {
     if (!s.focus) return s.toast("Select something to delete", "error");
@@ -185,6 +201,26 @@ export function Ribbon() {
               <Btn icon="todo" label="To-Do list" onClick={() => s.set({ panel: "todo" })} />
               <Btn icon="mto" label="MTO" onClick={() => s.set({ panel: "mto" })} />
               <Btn icon="lines" label="Line list" onClick={() => s.set({ panel: "lines" })} />
+            </Group>
+          </>
+        )}
+        {tab === "database" && (
+          <>
+            <Group title="Plant database">
+              <Btn id="db-open" icon="database" label="Manager" onClick={() => openDb("overview")} title="Plant database: tables, backup and restore" />
+              <Btn icon="table" label="Catalog & specs" onClick={() => openDb("catalog")} />
+              <Btn icon="terminal" label="SQL & reports" onClick={() => openDb("sql")} />
+              <Btn icon="history" label="Transactions" onClick={() => openDb("history")} />
+            </Group>
+            <Group title="Approval">
+              <Btn icon="shield" label="Objects" onClick={() => openDb("objects")} title="Every object with its status, permission group, system and revision" />
+              <Btn id="color-status" icon="status" label="Color by status" active={s.colorBy === "status"} onClick={() => s.set({ colorBy: s.colorBy === "status" ? "line" : "status" })} />
+              <Btn icon="send" label="Submit for review" disabled={!owners.length} onClick={() => setStatus("In Review")} />
+              <Btn id="approve-sel" icon="tick" label="Approve" disabled={!owners.length || !s.user.canApprove} onClick={() => setStatus("Approved")} title={s.user.canApprove ? "Approve the selected objects (locks them)" : "Only editors can approve"} />
+              <Btn icon="undo" label="Back to Working" disabled={!owners.length} onClick={() => setStatus("Working")} />
+            </Group>
+            <Group title="Workshare">
+              <Btn id="shared-open" icon="user" label={s.shared ? "Shared plant" : "Share plant"} active={!!s.shared} onClick={() => s.set({ projectsOpen: true })} title="Work on one plant with your team, live" />
             </Group>
           </>
         )}

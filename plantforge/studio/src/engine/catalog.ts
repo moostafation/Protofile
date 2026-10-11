@@ -72,18 +72,37 @@ export interface FlangeData {
   boltDiaMm: number;
 }
 
-type PipeRow = { dn: number; od: number; wall: Record<string, number> };
-type FitRow = { elbow90_lr: number; elbow45_lr: number; tee: number };
-type FlRow = { o: number; tf: number; y: number; rf_dia: number; hub_dia: number; bc: number; bolts: number; bolt_dia: string };
+export type PipeRow = { dn: number; od: number; wall: Record<string, number> };
+export type FitRow = { elbow90_lr: number; elbow45_lr: number; tee: number };
+export type FlRow = { o: number; tf: number; y: number; rf_dia: number; hub_dia: number; bc: number; bolts: number; bolt_dia: string };
 
-const PIPE = pipeData.sizes as Record<string, PipeRow>;
-const FIT = fitData.sizes as Record<string, FitRow>;
-const FLANGES: Record<string, { rf_height: number; sizes: Record<string, FlRow> }> = {
-  [flangeData.rating]: flangeData as unknown as { rf_height: number; sizes: Record<string, FlRow> },
-};
-const VALVES: Record<string, Record<string, Record<string, number>>> = {
-  [valveData.rating]: valveData.types as Record<string, Record<string, number>>,
-};
+/** The whole dimensional catalog. Standard tables ship with the program; a plant database may replace them. */
+export interface CatalogData {
+  pipe: Record<string, PipeRow>;
+  fittings: Record<string, FitRow>;
+  flanges: Record<string, { rf_height: number; sizes: Record<string, FlRow> }>;
+  valves: Record<string, Record<string, Record<string, number>>>; // rating -> type -> nps -> face-to-face
+}
+
+export function standardCatalogData(): CatalogData {
+  return structuredClone({
+    pipe: pipeData.sizes as Record<string, PipeRow>,
+    fittings: fitData.sizes as Record<string, FitRow>,
+    flanges: { [flangeData.rating]: { rf_height: flangeData.rf_height, sizes: flangeData.sizes as Record<string, FlRow> } },
+    valves: { [valveData.rating]: valveData.types as Record<string, Record<string, number>> },
+  });
+}
+
+let active: CatalogData = standardCatalogData();
+let revision = 0;
+
+/** Swap the catalog the engine sizes parts from (e.g. after editing the catalog database). */
+export function setCatalogData(data: CatalogData) {
+  active = data;
+  revision += 1;
+}
+export const getCatalogData = () => active;
+export const catalogRevision = () => revision;
 
 function row<T>(table: Record<string, T>, nps: string, what: string): T {
   const key = normalizeNps(nps);
@@ -93,20 +112,22 @@ function row<T>(table: Record<string, T>, nps: string, what: string): T {
 }
 
 export const catalog = {
-  sizes: Object.keys(PIPE).sort((a, b) => npsValue(a) - npsValue(b)),
-  dn: (nps: string) => row(PIPE, nps, "pipe").dn,
-  od: (nps: string) => row(PIPE, nps, "pipe").od,
+  get sizes() {
+    return Object.keys(active.pipe).sort((a, b) => npsValue(a) - npsValue(b));
+  },
+  dn: (nps: string) => row(active.pipe, nps, "pipe").dn,
+  od: (nps: string) => row(active.pipe, nps, "pipe").od,
   pipe(nps: string, schedule: string): PipeData {
-    const r = row(PIPE, nps, "pipe");
+    const r = row(active.pipe, nps, "pipe");
     const wall = r.wall[schedule];
     if (wall === undefined) throw new CatalogError(`pipe NPS ${normalizeNps(nps)}: no schedule ${schedule}`);
     return { nps: normalizeNps(nps), dn: r.dn, od: r.od, wall, schedule, weightPerM: 0.0246615 * (r.od - wall) * wall };
   },
-  elbow90: (nps: string) => row(FIT, nps, "90deg LR elbow").elbow90_lr,
-  elbow45: (nps: string) => row(FIT, nps, "45deg LR elbow").elbow45_lr,
-  tee: (nps: string) => row(FIT, nps, "equal tee").tee,
+  elbow90: (nps: string) => row(active.fittings, nps, "90deg LR elbow").elbow90_lr,
+  elbow45: (nps: string) => row(active.fittings, nps, "45deg LR elbow").elbow45_lr,
+  tee: (nps: string) => row(active.fittings, nps, "equal tee").tee,
   flange(nps: string, rating: string): FlangeData {
-    const t = FLANGES[rating];
+    const t = active.flanges[rating];
     if (!t) throw new CatalogError(`no flange data for rating ${rating}`);
     const r = row(t.sizes, nps, `${rating} flange`);
     return {
@@ -126,12 +147,12 @@ export const catalog = {
     };
   },
   valveLength(type: string, nps: string, rating: string): number {
-    const t = VALVES[rating]?.[type];
+    const t = active.valves[rating]?.[type];
     if (!t) throw new CatalogError(`no ${rating} data for valve type ${type}`);
     return row(t, nps, `${rating} ${type} valve`);
   },
   valveSizes(type: string, rating: string): string[] {
-    return Object.keys(VALVES[rating]?.[type] ?? {});
+    return Object.keys(active.valves[rating]?.[type] ?? {});
   },
 };
 

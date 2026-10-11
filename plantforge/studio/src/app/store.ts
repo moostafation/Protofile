@@ -4,6 +4,7 @@ import { create } from "zustand";
 import type { ObjRef } from "../engine/commands";
 import { Model, computeModel, runClash } from "../engine/compute";
 import type { PlantDoc, TemplateId } from "../engine/doc";
+import { ApprovalError, LOCAL_USER, User, normalizeDoc, stamp } from "../engine/meta";
 
 export type ToolId = "select" | "move" | "place" | "rack" | "route" | "insert" | "connect" | "measure";
 
@@ -11,6 +12,19 @@ export interface Toast {
   id: number;
   text: string;
   kind: "ok" | "error" | "info";
+}
+
+export type CommitKind = "load" | "apply" | "undo" | "redo" | "remote";
+export type CommitListener = (doc: PlantDoc, label: string, kind: CommitKind, prev: PlantDoc, by?: string) => void;
+/** Subscribers to committed transactions (the plant database, the shared-database sync). */
+export const commits = new Set<CommitListener>();
+
+export type DbPage = "overview" | "objects" | "catalog" | "sql" | "history";
+
+export interface SharedInfo {
+  plantId: string;
+  name: string;
+  status: "connecting" | "live" | "saving" | "offline" | "readonly";
 }
 
 export interface NewLineSettings {
@@ -47,11 +61,23 @@ export interface State {
   assistantOpen: boolean;
   projectsOpen: boolean;
   helpOpen: boolean;
+  user: User;
+  dbOpen: boolean;
+  dbPage: DbPage;
+  dbRev: number;
+  peopleRev: number;
+  colorBy: "line" | "status";
+  shared: SharedInfo | null;
 }
 
 export interface Actions {
   load(doc: PlantDoc, label?: string): void;
-  apply(doc: PlantDoc, label: string): void;
+  /** Commit an edit as one transaction. Returns false when it was refused (approved objects are locked). */
+  apply(doc: PlantDoc, label: string): boolean;
+  /** Apply a change that arrived from the shared database (`by` is the author's user id). */
+  applyRemote(doc: PlantDoc, label: string, by?: string): void;
+  /** Recompute the model after the catalog or specs changed. */
+  recompute(): void;
   preview(doc: PlantDoc): void;
   undo(): void;
   redo(): void;
@@ -98,22 +124,61 @@ export const useStore = create<State & Actions>((set, get) => ({
   assistantOpen: false,
   projectsOpen: false,
   helpOpen: false,
+  user: LOCAL_USER,
+  dbOpen: false,
+  dbPage: "overview",
+  dbRev: 0,
+  peopleRev: 0,
+  colorBy: "line",
+  shared: null,
 
   load(doc, label = "Opened") {
-    set({ doc, model: compute(doc, get().clearance), history: [], future: [], selection: [], focus: null, lastLabel: label, dirty: false, isoLine: null });
+    const prev = get().doc;
+    const d = normalizeDoc(doc, get().user);
+    set({ doc: d, model: compute(d, get().clearance), history: [], future: [], selection: [], focus: null, lastLabel: label, dirty: false, isoLine: null });
+    commits.forEach((f) => f(d, label, "load", prev));
   },
 
   apply(doc, label) {
-    const { doc: prev, history, clearance } = get();
+    const { doc: prev, history, clearance, user, shared } = get();
+    if (shared?.status === "readonly") {
+      get().toast("View only: you can look at this shared plant but not change it.", "error");
+      return false;
+    }
+    let next: PlantDoc;
+    try {
+      next = stamp(prev, doc, user);
+    } catch (e) {
+      if (e instanceof ApprovalError) {
+        get().toast(e.message, "error");
+        get().logLine(`Refused: ${label}. ${e.message}`, "error");
+        return false;
+      }
+      throw e;
+    }
     set({
-      doc,
-      model: compute(doc, clearance),
+      doc: next,
+      model: compute(next, clearance),
       history: [...history.slice(-99), { doc: prev, label }],
       future: [],
       lastLabel: label,
       dirty: true,
     });
     get().select(get().selection.filter((u) => get().model.byUid.has(u)), get().focus);
+    commits.forEach((f) => f(next, label, "apply", prev));
+    return true;
+  },
+
+  applyRemote(doc, label, by) {
+    const prev = get().doc;
+    // Undo snapshots would roll back other people's work, so remote changes start a fresh undo history.
+    set({ doc, model: compute(doc, get().clearance), history: [], future: [] });
+    get().select(get().selection.filter((u) => get().model.byUid.has(u)), get().focus);
+    commits.forEach((f) => f(doc, label, "remote", prev, by));
+  },
+
+  recompute() {
+    set({ model: compute(get().doc, get().clearance), dbRev: get().dbRev + 1 });
   },
 
   preview(doc) {
@@ -126,6 +191,7 @@ export const useStore = create<State & Actions>((set, get) => ({
     if (!h) return;
     set({ doc: h.doc, model: compute(h.doc, clearance), history: history.slice(0, -1), future: [...future, { doc, label: lastLabel }], lastLabel: h.label, dirty: true });
     get().toast(`Undid: ${lastLabel}`, "info");
+    commits.forEach((f) => f(h.doc, `Undo: ${lastLabel}`, "undo", doc));
   },
 
   redo() {
@@ -134,6 +200,7 @@ export const useStore = create<State & Actions>((set, get) => ({
     if (!f) return;
     set({ doc: f.doc, model: compute(f.doc, clearance), future: future.slice(0, -1), history: [...history, { doc, label: lastLabel }], lastLabel: f.label, dirty: true });
     get().toast(`Redid: ${f.label}`, "info");
+    commits.forEach((g) => g(f.doc, `Redo: ${f.label}`, "redo", doc));
   },
 
   select(uids, focus) {

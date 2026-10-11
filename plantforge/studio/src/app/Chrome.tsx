@@ -7,6 +7,10 @@ import { toSvg } from "../engine/drawing";
 import { lineIsometric } from "../engine/iso";
 import { linePcf } from "../engine/pcf";
 import { Cloud, ProjectMeta, canDownload, cloud, inClaude } from "../platform/claude";
+import type { DbState } from "../db/PlantDB";
+import { newDatabase, openState } from "../db/service";
+import { SharedPlantMeta, deleteShared, joinShared, leaveShared, listShared, shareCurrent, sharedAvailable } from "../db/shared";
+import { personName } from "../platform/people";
 import { HELP, runCommand } from "./cli";
 import { copyText, exportLine } from "./exporters";
 import { cliHooks, hub } from "./hub";
@@ -43,6 +47,14 @@ export function TopBar({ assistantAvailable, projectId, onSave }: { assistantAva
           {hard ? `${hard} clash${hard > 1 ? "es" : ""}` : "Clash-free"}
         </span>
         {errors > 0 && <span className="pill crit">{errors} to fix</span>}
+        <button type="button" id="db-pill" className={`db-pill${s.shared ? ` ${s.shared.status}` : ""}`} onClick={() => s.set({ dbOpen: true, dbPage: "overview" })} title={s.shared ? `Shared plant database "${s.shared.name}" (${s.shared.status})` : "Plant database kept in this browser"}>
+          <Icon name="database" size={14} />
+          <span>{s.shared ? (s.shared.status === "live" ? "Shared · live" : `Shared · ${s.shared.status}`) : "Local DB"}</span>
+          <span className="db-user">
+            <Icon name="user" size={13} /> {s.user.name}
+            {s.user.canApprove ? "" : " · no approve"}
+          </span>
+        </button>
       </div>
       <div className="tb-actions">
         <button type="button" className="btn ghost" onClick={() => s.set({ projectsOpen: true })}>
@@ -148,7 +160,7 @@ export function Toasts() {
 }
 
 // ------------------------------------------------------------------ modal shell
-function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
+export function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
   useEffect(() => {
     const k = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", k);
@@ -297,12 +309,19 @@ export function Projects({ projectId, setProjectId, onSave }: { projectId: strin
       refresh(cl);
     });
   }, []);
-  const open = (doc: PlantDoc, id: string | null, label: string) => {
-    s.load(doc, label);
+  const finish = (id: string | null, label: string) => {
     setProjectId(id);
     s.set({ projectsOpen: false });
     setTimeout(() => hub.viewer?.setView("iso-sw"), 50);
     s.toast(label);
+  };
+  const open = async (doc: PlantDoc, id: string | null, label: string) => {
+    await newDatabase(doc, label, id);
+    finish(id, label);
+  };
+  const openSaved = async (state: DbState | { doc: PlantDoc }, id: string, label: string) => {
+    await openState(state, label, id);
+    finish(id, label);
   };
   return (
     <Modal title="Projects" onClose={() => s.set({ projectsOpen: false })}>
@@ -336,7 +355,8 @@ export function Projects({ projectId, setProjectId, onSave }: { projectId: strin
             }}
           />
         </div>
-        <h3>Saved in your account</h3>
+        <SharedPlants onDone={(label) => finish(null, label)} />
+        <h3>Saved in your account (private)</h3>
         {c === undefined && <p className="muted">Checking…</p>}
         {c === null && (
           <p className="muted">
@@ -368,8 +388,8 @@ export function Projects({ projectId, setProjectId, onSave }: { projectId: strin
                       type="button"
                       className="proj-open"
                       onClick={async () => {
-                        const doc = await c.load(p.id);
-                        if (doc) open(doc, p.id, `Opened ${p.name}`);
+                        const state = await c.load(p.id);
+                        if (state) openSaved(state, p.id, `Opened ${p.name}`);
                       }}
                     >
                       <span className="mono">{p.name}</span>
@@ -408,5 +428,113 @@ export function Projects({ projectId, setProjectId, onSave }: { projectId: strin
         )}
       </div>
     </Modal>
+  );
+}
+
+// ------------------------------------------------------------------ shared plants (team database)
+function SharedPlants({ onDone }: { onDone: (label: string) => void }) {
+  const s = useStore();
+  const [ok, setOk] = useState<boolean | undefined>(undefined);
+  const [list, setList] = useState<SharedPlantMeta[]>([]);
+  const [busy, setBusy] = useState("");
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const refresh = async () => {
+    try {
+      setList(await listShared());
+    } catch {
+      setList([]);
+    }
+  };
+  useEffect(() => {
+    sharedAvailable().then((a) => {
+      setOk(a);
+      if (a) refresh();
+    });
+  }, []);
+  const run = async (label: string, fn: () => Promise<unknown>, done?: string) => {
+    setBusy(label);
+    try {
+      await fn();
+      if (done) onDone(done);
+      else await refresh();
+    } catch (e) {
+      s.toast(`${label} did not work: ${(e as Error).message}`, "error");
+    } finally {
+      setBusy("");
+    }
+  };
+  return (
+    <section className="shared-sec" aria-label="Shared plants">
+      <h3>Shared plants · team database</h3>
+      <p className="muted small">
+        Everyone who can open this page works on the same plant at the same time, like SP3D&apos;s Model database: changes appear live for the others, approved objects stay locked, and two people changing the same object never overwrite each other.
+      </p>
+      {ok === undefined && <p className="muted">Checking…</p>}
+      {ok === false && <p className="muted">{inClaude() ? "Sign in to Claude to work on shared plants." : "Shared plants work when this page is opened in Claude."}</p>}
+      {ok && (
+        <>
+          <div className="proj-actions">
+            {s.shared ? (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  leaveShared();
+                  refresh();
+                }}
+              >
+                Leave “{s.shared.name}”
+              </button>
+            ) : (
+              <button type="button" id="share-plant" className="btn accent" disabled={!!busy} onClick={() => run("Sharing", () => shareCurrent(), `Shared “${s.doc.project.name}” with everyone who can open this page`)}>
+                <Icon name="database" size={15} /> Share “{s.doc.project.name}”
+              </button>
+            )}
+            {busy && <span className="muted">{busy}…</span>}
+          </div>
+          {list.length === 0 ? (
+            <p className="muted">No shared plants yet.</p>
+          ) : (
+            <ul className="proj-list" id="shared-list">
+              {list.map((p) => (
+                <li key={p.id} className={s.shared?.plantId === p.id ? "on" : ""}>
+                  <button type="button" className="proj-open" disabled={!!busy || s.shared?.plantId === p.id} onClick={() => run("Opening", () => joinShared(p.id), `Opened shared plant ${p.name}`)}>
+                    <span className="mono">
+                      {p.name}
+                      {s.shared?.plantId === p.id ? " · open" : ""}
+                    </span>
+                    <span className="muted">
+                      {p.objects} objects · shared by {personName(p.createdBy) || "someone"} · {new Date(p.updatedAt).toLocaleString()}
+                    </span>
+                  </button>
+                  {s.user.canApprove &&
+                    (confirmId === p.id ? (
+                      <span className="confirm">
+                        <button
+                          type="button"
+                          className="btn small danger"
+                          onClick={() => {
+                            setConfirmId(null);
+                            run("Deleting", () => deleteShared(p.id));
+                          }}
+                        >
+                          Delete for everyone
+                        </button>
+                        <button type="button" className="btn small" onClick={() => setConfirmId(null)}>
+                          Keep
+                        </button>
+                      </span>
+                    ) : (
+                      <button type="button" className="icon-btn" aria-label={`Delete ${p.name}`} onClick={() => setConfirmId(p.id)}>
+                        <Icon name="trash" size={15} />
+                      </button>
+                    ))}
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </section>
   );
 }

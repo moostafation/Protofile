@@ -7,10 +7,13 @@ import type { Comp } from "../engine/model";
 import { linePcf } from "../engine/pcf";
 import { SPECS, specApi } from "../engine/spec";
 import { dirName, fmtENU } from "../engine/vec";
+import { ApprovalError, STATUSES, objects, setMeta } from "../engine/meta";
+import type { ApprovalStatus } from "../engine/doc";
 import { LINE_COLORS } from "../viewer/Viewer";
 import { copyText } from "./exporters";
 import { cliHooks, hub } from "./hub";
 import { Icon } from "./icons";
+import { personName } from "../platform/people";
 import { State, useStore } from "./store";
 
 type Panel = State["panel"];
@@ -106,6 +109,7 @@ function Properties() {
     return (
       <div className="props">
         <Header kind="Pipe rack" title={st.tag} />
+        <DbCard id={st.id} />
         <div className="fields">
           <TextField id="st-tag" label="Tag" value={st.tag} onCommit={(v) => apply({ tag: v }, `Rename ${st.tag}`)} />
           <NumField id="st-e" label="Start E" value={st.origin[0]} onCommit={(v) => apply({ origin: [v, st.origin[1], st.origin[2]] }, `Move ${st.tag}`)} step={500} />
@@ -205,6 +209,7 @@ function EquipmentProps({ eq, nozzle }: { eq: EquipmentDoc; nozzle?: Comp }) {
   return (
     <div className="props">
       <Header kind={t.name} title={eq.tag} sub={eq.description} />
+      <DbCard id={eq.id} />
       <div className="fields">
         <TextField id="eq-tag" label="Tag" value={eq.tag} onCommit={(v) => s.apply(updateEquipment(s.doc, eq.id, { tag: v.toUpperCase() }), `Rename ${eq.tag}`)} />
         <TextField id="eq-desc" label="Description" value={eq.description} onCommit={(v) => s.apply(updateEquipment(s.doc, eq.id, { description: v }), `Describe ${eq.tag}`)} />
@@ -282,6 +287,7 @@ function LineProps({ lineId, comp }: { lineId: string; comp?: Comp }) {
     <div className="props">
       {comp && <ComponentCard comp={comp} />}
       <Header kind="Pipeline" title={line.number} sub={line.fluid} />
+      <DbCard id={line.id} />
       {res.error && (
         <div className="callout crit">
           <b>Routing problem.</b> {res.error.replace(`${line.number}: `, "")}
@@ -552,6 +558,70 @@ function LineList() {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ database card (SP3D-style object metadata)
+const STATUS_CLASS: Record<ApprovalStatus, string> = { Working: "info", "In Review": "warn", Approved: "ok", Rejected: "crit" };
+
+export function DbCard({ id }: { id: string }) {
+  const s = useStore();
+  const found = objects(s.doc).find((o) => o.obj.id === id);
+  if (!found?.obj.meta) return null;
+  const m = found.obj.meta;
+  const systems = (s.doc.hierarchy ?? []).filter((h) => h.kind === "system");
+  const when = (t: number) => new Date(t).toLocaleString();
+  const change = (patch: Parameters<typeof setMeta>[2], label: string) => {
+    try {
+      s.apply(setMeta(s.doc, [id], patch, s.user), label);
+    } catch (e) {
+      if (e instanceof ApprovalError) s.toast(e.message, "error");
+      else throw e;
+    }
+  };
+  return (
+    <div className={`db-card${m.status === "Approved" ? " locked" : ""}`}>
+      <div className="db-card-head">
+        <span className={`chip ${STATUS_CLASS[m.status]}`}>{m.status}</span>
+        <span className="mono muted">OID {id} · rev {m.rev}</span>
+        {m.status === "Approved" && <span className="lock">locked</span>}
+      </div>
+      <div className="fields">
+        <label className="field">
+          <span>Status</span>
+          <select id={`db-status-${id}`} value={m.status} onChange={(e) => change({ status: e.target.value as ApprovalStatus }, `Set ${e.target.value}`)}>
+            {STATUSES.map((st) => (
+              <option key={st} value={st} disabled={(st === "Approved" || st === "Rejected") && !s.user.canApprove}>
+                {st}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>Permission group</span>
+          <select id={`db-group-${id}`} value={m.group} onChange={(e) => change({ group: e.target.value }, `Permission group ${e.target.value}`)}>
+            {(s.doc.groups ?? []).map((g) => (
+              <option key={g}>{g}</option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>System</span>
+          <select id={`db-system-${id}`} value={m.system} onChange={(e) => change({ system: e.target.value }, `Move to system ${systems.find((x) => x.id === e.target.value)?.name}`)}>
+            {systems.map((h) => (
+              <option key={h.id} value={h.id}>
+                {h.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <p className="note">
+        Created by {personName(m.createdBy)} · {when(m.createdAt)}
+        <br />
+        Last change by {personName(m.modifiedBy)} · {when(m.modifiedAt)}
+      </p>
     </div>
   );
 }

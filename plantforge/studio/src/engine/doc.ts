@@ -20,8 +20,30 @@ export interface NozzleDoc {
   place: NozzlePlace;
 }
 
+/** SP3D-style object metadata kept with every model object in the database. */
+export type ApprovalStatus = "Working" | "In Review" | "Approved" | "Rejected";
+
+export interface ObjMeta {
+  status: ApprovalStatus;
+  group: string; // permission group
+  system: string; // hierarchy node id
+  rev: number;
+  createdBy: string;
+  createdAt: number;
+  modifiedBy: string;
+  modifiedAt: number;
+}
+
+export interface HierNode {
+  id: string;
+  parent: string | null;
+  kind: "area" | "unit" | "system";
+  name: string;
+}
+
 export interface EquipmentDoc {
   id: string;
+  meta?: ObjMeta;
   tag: string;
   template: TemplateId;
   description: string;
@@ -33,6 +55,7 @@ export interface EquipmentDoc {
 
 export interface StructureDoc {
   id: string;
+  meta?: ObjMeta;
   tag: string;
   type: "rack";
   description: string;
@@ -52,6 +75,7 @@ export type EndRef =
 
 export interface LineDoc {
   id: string;
+  meta?: ObjMeta;
   number: string;
   spec: string;
   nps: string;
@@ -70,6 +94,10 @@ export interface PlantDoc {
   structures: StructureDoc[];
   lines: LineDoc[];
   seq: number;
+  /** System hierarchy (Area > Unit > System), as in the SP3D workspace explorer. */
+  hierarchy?: HierNode[];
+  /** Permission groups objects can belong to. */
+  groups?: string[];
 }
 
 export const emptyDoc = (): PlantDoc => ({
@@ -81,6 +109,12 @@ export const emptyDoc = (): PlantDoc => ({
   seq: 1,
 });
 
+let ID_SUFFIX = "";
+/** In a shared plant every session adds its own suffix, so ids made at the same time never collide. */
+export function setIdSuffix(suffix: string) {
+  ID_SUFFIX = suffix;
+}
+
 export function nextId(doc: PlantDoc, prefix: string): [string, PlantDoc] {
-  return [`${prefix}${doc.seq}`, { ...doc, seq: doc.seq + 1 }];
+  return [`${prefix}${doc.seq}${ID_SUFFIX}`, { ...doc, seq: doc.seq + 1 }];
 }

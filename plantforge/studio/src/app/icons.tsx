@@ -46,6 +46,14 @@ const P: Record<string, string> = {
   stop: "M7 7h10v10H7z",
   send: "M4 12l16-8-6 16-2-7z",
   copy: "M8 8h11v12H8zM5 16V4h11",
+  database: "M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3",
+  shield: "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6zM8.5 12l2.5 2.5 4.5-5",
+  table: "M4 5h16v14H4zM4 10h16M4 15h16M10 5v14",
+  terminal: "M4 5h16v14H4zM7 9l3 3-3 3M12 15h5",
+  history: "M3 12a9 9 0 103-6.7M3 4v5h5M12 7v5l3 2",
+  lock: "M6 11h12v10H6zM8.5 11V8a3.5 3.5 0 017 0v3",
+  user: "M12 12a4 4 0 100-8 4 4 0 100 8zM4 21c1-4 4-6 8-6s7 2 8 6",
+  status: "M5 5h6v6H5zM13 13h6v6h-6zM13 5l6 6M19 5l-6 6M5 13h6v6H5z",
   eye: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 100 6 3 3 0 100-6z",
 };
 

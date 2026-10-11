@@ -3,6 +3,7 @@ import { LINE_COLORS } from "../viewer/Viewer";
 import { hub } from "./hub";
 import { Icon } from "./icons";
 import { useStore } from "./store";
+import { objName, objects } from "../engine/meta";
 
 const KIND_LABEL: Record<string, string> = { PIPE: "Pipe", ELBOW: "Elbow", TEE: "Tee", FLANGE: "Flange", GASKET: "Gasket", VALVE: "Valve", SUPPORT: "Shoe" };
 
@@ -12,6 +13,7 @@ export function Explorer() {
   const select = useStore((s) => s.select);
   const [q, setQ] = useState("");
   const [open, setOpen] = useState<Record<string, boolean>>({});
+  const [view, setView] = useState<"system" | "type">("system");
   const needle = q.trim().toUpperCase();
   const match = (t: string) => !needle || t.toUpperCase().includes(needle);
   const toggle = (k: string) => setOpen((o) => ({ ...o, [k]: !o[k] }));
@@ -29,9 +31,22 @@ export function Explorer() {
   return (
     <aside className="pane explorer" aria-label="Model explorer">
       <div className="pane-head">
-        <h2>Model</h2>
+        <div className="pane-head-row">
+          <h2>Model</h2>
+          <div className="seg-tabs" role="tablist" aria-label="Explorer view">
+            <button type="button" role="tab" id="ex-system" aria-selected={view === "system"} onClick={() => setView("system")}>
+              System
+            </button>
+            <button type="button" role="tab" id="ex-type" aria-selected={view === "type"} onClick={() => setView("type")}>
+              Type
+            </button>
+          </div>
+        </div>
         <input id="explorer-search" className="search" type="search" placeholder="Find tag or line" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
+      {view === "system" ? (
+        <SystemTree match={match} pick={pick} />
+      ) : (
       <div className="pane-scroll">
         <div className="tree-root">
           <span className="eyebrow">{p.plant || "Plant"}</span>
@@ -125,6 +140,7 @@ export function Explorer() {
           ))}
         </TreeSection>
       </div>
+      )}
     </aside>
   );
 }
@@ -137,5 +153,89 @@ function TreeSection({ title, count, children }: { title: string; count: number;
       </h3>
       <ul className="tree">{children}</ul>
     </section>
+  );
+}
+
+// ------------------------------------------------------------------ system hierarchy (Area > Unit > System > objects)
+const STATUS_DOT: Record<string, string> = { Working: "st-working", "In Review": "st-review", Approved: "st-approved", Rejected: "st-rejected" };
+
+function SystemTree({ match, pick }: { match: (t: string) => boolean; pick: (uids: string[], f: { type: "equipment" | "line" | "structure"; id: string }, fit?: boolean) => void }) {
+  const s = useStore();
+  const [adding, setAdding] = useState<string | null>(null);
+  const [name, setName] = useState("");
+  const [closed, setClosed] = useState<Record<string, boolean>>({});
+  const nodes = s.doc.hierarchy ?? [];
+  const objs = objects(s.doc);
+  const focus = s.focus;
+  const uidsOf = (type: string, id: string) => s.model.comps.filter((c) => c.owner.type === type && c.owner.id === id).map((c) => c.uid);
+  const iconOf = (type: string, o: (typeof objs)[number]["obj"]) => (type === "equipment" ? (o as { template: string }).template : type === "line" ? "route" : "rack");
+  const addSystem = (parent: string) => {
+    const n = name.trim();
+    if (!n) return setAdding(null);
+    const id = `sys-${Date.now().toString(36)}`;
+    s.apply({ ...s.doc, hierarchy: [...nodes, { id, parent, kind: "system", name: n }] }, `Add system ${n}`);
+    setAdding(null);
+    setName("");
+  };
+  const render = (parent: string | null, depth: number): React.ReactNode =>
+    nodes
+      .filter((h) => h.parent === parent)
+      .map((h) => {
+        const members = objs.filter((o) => o.obj.meta?.system === h.id && match(objName(o.obj)));
+        const isClosed = !!closed[h.id];
+        return (
+          <li key={h.id}>
+            <div className="sys-row" style={{ paddingLeft: 8 + depth * 14 }}>
+              <button type="button" className="twisty" aria-expanded={!isClosed} onClick={() => setClosed((c) => ({ ...c, [h.id]: !c[h.id] }))}>
+                <Icon name="chevron" size={12} />
+              </button>
+              <Icon name={h.kind === "system" ? "folder" : h.kind === "unit" ? "iso" : "plan"} size={14} />
+              <span className={`sys-name ${h.kind}`}>{h.name}</span>
+              {h.kind === "system" && <span className="count">{members.length}</span>}
+              {h.kind === "unit" && (
+                <button type="button" className="icon-btn small" aria-label="Add a system" title="Add a system" onClick={() => setAdding(h.id)}>
+                  <Icon name="plus" size={13} />
+                </button>
+              )}
+            </div>
+            {!isClosed && (
+              <ul className="tree">
+                {adding === h.id && (
+                  <li style={{ paddingLeft: 30 + depth * 14 }} className="sys-add">
+                    <input id="new-system" autoFocus placeholder="System name, e.g. Steam" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => (e.key === "Enter" ? addSystem(h.id) : e.key === "Escape" && setAdding(null))} />
+                    <button type="button" className="btn small" onClick={() => addSystem(h.id)}>
+                      Add
+                    </button>
+                  </li>
+                )}
+                {render(h.id, depth + 1)}
+                {members.map(({ type, obj }) => (
+                  <li key={obj.id}>
+                    <button
+                      type="button"
+                      className={`tree-item sys-obj${focus?.id === obj.id ? " on" : ""}`}
+                      style={{ paddingLeft: 30 + depth * 14 }}
+                      onClick={() => pick(type === "equipment" ? [`${obj.id}/BODY`] : uidsOf(type, obj.id), { type, id: obj.id })}
+                      onDoubleClick={() => pick(uidsOf(type, obj.id), { type, id: obj.id }, true)}
+                    >
+                      <Icon name={iconOf(type, obj)} size={14} />
+                      <span className="mono">{objName(obj)}</span>
+                      <span className={`st-dot ${STATUS_DOT[obj.meta?.status ?? "Working"]}`} title={obj.meta?.status} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </li>
+        );
+      });
+  return (
+    <div className="pane-scroll">
+      <div className="tree-root">
+        <span className="eyebrow">Plant</span>
+        <span className="tree-root-name">{s.doc.project.plant || s.doc.project.name}</span>
+      </div>
+      <ul className="tree sys-tree">{render(null, 0)}</ul>
+    </div>
   );
 }

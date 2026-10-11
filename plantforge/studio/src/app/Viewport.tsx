@@ -49,6 +49,7 @@ export function Viewport() {
       if (s.selection !== p.selection) v.setSelection(s.selection);
       if (s.labels !== p.labels) v.setLabels(s.labels, s.model);
       if (s.section !== p.section) v.setSection(s.section);
+      if (s.colorBy !== p.colorBy) v.setColorBy(s.colorBy, s.model);
       if (s.tool !== p.tool || s.template !== p.template || s.inlineType !== p.inlineType) activateTool(s.tool);
     });
     return () => {

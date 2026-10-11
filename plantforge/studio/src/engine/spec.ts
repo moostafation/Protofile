@@ -11,7 +11,7 @@ export interface PartRule {
   skey: string;
 }
 
-interface PipeRule {
+export interface PipeRule {
   lo: number;
   hi: number;
   schedule: string;
@@ -62,7 +62,15 @@ export function specFromToml(text: string): PipingSpec {
   }
 }
 
-export const SPECS: Record<string, PipingSpec> = { A1A: specFromToml(a1a) };
+export const standardSpecs = (): Record<string, PipingSpec> => ({ A1A: specFromToml(a1a) });
+
+/** Specs in use. Replaced as a whole when a plant database with its own specs is opened. */
+export const SPECS: Record<string, PipingSpec> = standardSpecs();
+
+export function setSpecs(specs: Record<string, PipingSpec>) {
+  for (const k of Object.keys(SPECS)) delete SPECS[k];
+  Object.assign(SPECS, specs);
+}
 
 export function getSpec(name: string): PipingSpec {
   const s = SPECS[name];

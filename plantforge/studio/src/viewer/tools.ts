@@ -108,7 +108,11 @@ export function moveTool(ctx: ToolCtx): Tool {
       base = null;
       useStore.setState({ doc: b });
       const tag = f.type === "equipment" ? doc.equipment.find((e) => e.id === f.id)?.tag : doc.structures.find((s) => s.id === f.id)?.tag;
-      S().apply(doc, `Move ${tag} to ${fmtENU(pos)}`);
+      if (!S().apply(doc, `Move ${tag} to ${fmtENU(pos)}`)) {
+        S().recompute();
+        v.attachGizmo(f.type === "equipment" ? b.equipment.find((e) => e.id === f.id)!.origin : b.structures.find((s) => s.id === f.id)!.origin);
+        return;
+      }
       const broken = [...S().model.lines.values()].filter((l) => l.error);
       if (broken.length) S().toast(`${broken.length} line(s) could not follow the move - see the To-Do list, or use Re-route`, "error");
     } else S().preview(doc);
@@ -406,8 +410,8 @@ export function routeTool(ctx: ToolCtx, init?: Draft): Tool {
       if (nl.service !== "P") doc = updateLine(doc, id, { number: line.number.replace('-P-', `-${nl.service}-`) });
       label = `Route ${doc.lines.find((l) => l.id === id)!.number}`;
     }
-    st.apply(doc, label);
-    const res = st.model.lines.get(id!);
+    if (!st.apply(doc, label)) return;
+    const res = S().model.lines.get(id!);
     if (res?.error) st.toast(res.error, "error");
     else st.toast(`${label}: ${res?.comps.filter((c) => c.kind === "ELBOW").length ?? 0} elbows, ${((res?.pipeLength ?? 0) / 1000).toFixed(2)} m pipe`);
     st.select(res?.comps.map((c) => c.uid) ?? [], { type: "line", id: id! });
