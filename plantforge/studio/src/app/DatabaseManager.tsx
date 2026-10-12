@@ -1,7 +1,7 @@
 // The plant database manager: in one dialog, what SP3D spreads over Project Management, the catalog
 // task, Excel bulkload, the reports database and the transaction history.
 
-import { strToU8, unzipSync, zipSync } from "fflate";
+import { unzipSync } from "fflate";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { SqlValue } from "sql.js";
 import type { ApprovalStatus } from "../engine/doc";
@@ -9,6 +9,7 @@ import { ApprovalError, ObjType, STATUSES, setMeta } from "../engine/meta";
 import type { QueryResult, TableInfo } from "../db/PlantDB";
 import { EDITABLE, REPORTS } from "../db/schema";
 import { catalogChanged, dbHub, openBytes, resetCatalog } from "../db/service";
+import { databaseZip, reportsZip } from "../db/files";
 import { saveFile } from "../platform/claude";
 import { personName } from "../platform/people";
 import { Modal } from "./Chrome";
@@ -145,20 +146,8 @@ function Overview({ openSql }: { openSql: (sql: string) => void }) {
   const groups = (["plant", "catalog", "spec", "model", "report", "log", "view"] as const).map((g) => [g, tables.filter((t) => t.group === g)] as const);
 
   const backup = () => {
-    const base = safe(project.name);
-    const readme = [
-      `PlantForge plant database - ${project.name} - ${new Date().toISOString().slice(0, 16).replace("T", " ")}`,
-      "",
-      `${base}.sqlite is a standard SQLite 3 database. Open it with DB Browser for SQLite, DBeaver,`,
-      "Python (sqlite3), Excel/Power BI (ODBC) or any SQL tool.",
-      "",
-      "Tables: catalog (cat_*), specs (spec_*), model objects (object, equipment, nozzle, line, structure),",
-      "report tables (component, weld, clash, mto), transaction log (txn) and report views (v_*).",
-      "",
-      "Restore it in PlantForge Studio: Database > Plant database > Overview > Restore.",
-    ].join("\n");
-    const zip = zipSync({ [`${base}.sqlite`]: db.export(), "README.txt": strToU8(readme) }, { level: 6 });
-    offer(`${base}-database.zip`, new Blob([zip], { type: "application/zip" }));
+    const f = databaseZip(db, project.name);
+    offer(f.filename, f.blob);
   };
 
   const pick = async (f: File) => {
@@ -191,9 +180,8 @@ function Overview({ openSql }: { openSql: (sql: string) => void }) {
   };
 
   const reports = () => {
-    const files: Record<string, Uint8Array> = {};
-    for (const r of REPORTS) files[`${safe(r.name)}.csv`] = strToU8(db.csv(r.sql));
-    offer(`${safe(project.name)}-reports.zip`, new Blob([zipSync(files, { level: 6 })], { type: "application/zip" }));
+    const f = reportsZip(db, project.name);
+    offer(f.filename, f.blob);
   };
 
   return (

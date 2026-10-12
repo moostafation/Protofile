@@ -40,6 +40,7 @@ export function Viewport() {
     };
     const st = useStore.getState();
     v.labelsOn = st.labels;
+    v.setHidden(new Set(st.hidden));
     v.setModel(st.model);
     v.setClashes(st.model.clashes, st.showClashes);
     v.setSelection(st.selection);
@@ -56,6 +57,7 @@ export function Viewport() {
       if (s.labels !== p.labels) v.setLabels(s.labels, s.model);
       if (s.section !== p.section) v.setSection(s.section);
       if (s.colorBy !== p.colorBy) v.setColorBy(s.colorBy, s.model);
+      if (s.hidden !== p.hidden) v.setHidden(new Set(s.hidden));
       if (s.tool !== p.tool || s.template !== p.template || s.inlineType !== p.inlineType) activateTool(s.tool);
     });
     return () => {

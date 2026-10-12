@@ -3,7 +3,10 @@
 import type { Viewer } from "../viewer/Viewer";
 import { Tool, ToolCtx, connectTool, insertTool, measureTool, moveTool, placeTool, rackTool, routeFromNozzle, routeFromTee, routeTool, selectTool } from "../viewer/tools";
 import { CliHooks } from "./cli";
+import { useStatus } from "./status";
 import { ToolId, useStore } from "./store";
+
+const VIEW_LABEL: Record<string, string> = { iso: "Iso SE", "iso-sw": "Iso SW", "iso-nw": "Iso NW", "iso-ne": "Iso NE", plan: "Plan", north: "Elevation N", east: "Elevation E", south: "Elevation S", west: "Elevation W" };
 
 type TipFn = ToolCtx["tip"];
 
@@ -11,10 +14,13 @@ export const hub: {
   viewer: Viewer | null;
   tool: Tool | null;
   tip: TipFn;
+  /** Set by the app: save to the account / shared plant. */
+  save: () => void;
 } = {
   viewer: null,
   tool: null,
   tip: () => {},
+  save: () => {},
 };
 
 function ctx(): ToolCtx {
@@ -62,6 +68,22 @@ export const cliHooks: CliHooks = {
   },
   goto(uids) {
     hub.viewer?.fit(uids);
+  },
+  fit(uids) {
+    hub.viewer?.fit(uids ?? undefined);
+  },
+  view(name) {
+    hub.viewer?.setView(name);
+    useStatus.setState({ view: VIEW_LABEL[name] ?? name });
+  },
+  sectionAround(uids) {
+    const b = hub.viewer?.boundsOf(uids);
+    if (!b || b.isEmpty()) return;
+    const pad = 1500;
+    useStore.getState().set({ section: { lo: [b.min.x * 1000 - pad, b.min.y * 1000 - pad, b.min.z * 1000 - pad], hi: [b.max.x * 1000 + pad, b.max.y * 1000 + pad, b.max.z * 1000 + pad] } });
+  },
+  save() {
+    hub.save();
   },
   setWorkingZ(z) {
     useStore.getState().set({ workingZ: z });

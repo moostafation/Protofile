@@ -11,7 +11,8 @@ import type { DbState } from "../db/PlantDB";
 import { newDatabase, openState } from "../db/service";
 import { SharedPlantMeta, deleteShared, joinShared, leaveShared, listShared, shareCurrent, sharedAvailable } from "../db/shared";
 import { personName } from "../platform/people";
-import { HELP, runCommand } from "./cli";
+import type { Suggestions } from "../cmd/complete";
+import { HELP, runCommand, suggestFor } from "./cli";
 import { copyText, exportLine } from "./exporters";
 import { cliHooks, hub } from "./hub";
 import { Icon } from "./icons";
@@ -92,10 +93,36 @@ export function CommandBar() {
   const [hist, setHist] = useState<string[]>([]);
   const [hi, setHi] = useState(-1);
   const [open, setOpen] = useState(true);
+  const [sug, setSug] = useState<Suggestions>({ items: [], hint: "", from: 0 });
+  const [active, setActive] = useState(0);
+  const [popup, setPopup] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [log, open]);
+  const update = (text: string) => {
+    setV(text);
+    const next = suggestFor(text);
+    setSug(next);
+    setActive(0);
+    setPopup(text.trim().length > 0 && next.items.length > 0);
+  };
+  const accept = (i: number) => {
+    const item = sug.items[i];
+    if (!item) return;
+    update(v.slice(0, sug.from) + item.insert);
+    inputRef.current?.focus();
+  };
+  const run = () => {
+    if (!v.trim()) return;
+    runCommand(v, cliHooks);
+    setHist((h) => [...h.slice(-50), v]);
+    setHi(-1);
+    setV("");
+    setPopup(false);
+    setSug(suggestFor(""));
+  };
   return (
     <footer className="cmdbar">
       <div className="cmd-head">
@@ -104,12 +131,12 @@ export function CommandBar() {
         </button>
         <span>Command Window</span>
         <span className="grow" />
-        <span className="cmd-hint">HELP lists the commands</span>
+        <span className="cmd-hint">Tab completes · ↑↓ choose · help lists the commands · English or عربي</span>
       </div>
       {open && (
         <div className="cmd-log" role="log" ref={logRef}>
-          {log.slice(-80).map((l, i) => (
-            <div key={i} className={`cmd-${l.kind}`}>
+          {log.slice(-120).map((l, i) => (
+            <div key={i} className={`cmd-${l.kind}`} dir="auto">
               {l.kind === "in" ? "> " : ""}
               {l.text}
             </div>
@@ -120,21 +147,47 @@ export function CommandBar() {
         className="cmd-row"
         onSubmit={(e) => {
           e.preventDefault();
-          if (!v.trim()) return;
-          runCommand(v, cliHooks);
-          setHist((h) => [...h.slice(-50), v]);
-          setHi(-1);
-          setV("");
+          run();
         }}
       >
+        {popup && (
+          <ul className="cmd-sug" role="listbox" id="cmd-suggestions">
+            {sug.items.map((it, i) => (
+              <li key={`${it.label}-${i}`} role="option" aria-selected={i === active} className={i === active ? "on" : ""} onMouseDown={(e) => (e.preventDefault(), accept(i))}>
+                <span className="mono" dir="auto">
+                  {it.label}
+                </span>
+                {it.detail && <span className="cmd-sug-detail">{it.detail}</span>}
+              </li>
+            ))}
+            {sug.hint && <li className="cmd-sug-hint mono">{sug.hint}</li>}
+          </ul>
+        )}
         <span className="cmd-prompt mono">&gt;</span>
         <input
           id="command-line"
+          ref={inputRef}
           className="mono"
+          dir="auto"
           value={v}
-          placeholder="NEW PUMP AT E 0 N 0 · CONNECT P-101A/N2 E-101/N1 · MOVE P-101A E 500 · GOTO C-201 · HELP"
-          onChange={(e) => setV(e.target.value)}
+          placeholder="add pump at 5000,3000 · connect P-101A.N2 to E-101.N1 · move P-101A east 500 · find pumps · help"
+          onChange={(e) => update(e.target.value)}
+          onFocus={() => v.trim() && setPopup(sug.items.length > 0)}
+          onBlur={() => setPopup(false)}
           onKeyDown={(e) => {
+            if (e.key === "Tab" && popup && sug.items.length) {
+              e.preventDefault();
+              return accept(active);
+            }
+            if (e.key === "Escape" && popup) {
+              e.preventDefault();
+              e.stopPropagation();
+              return setPopup(false);
+            }
+            if (popup && sug.items.length && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+              e.preventDefault();
+              return setActive((a) => (a + (e.key === "ArrowDown" ? 1 : sug.items.length - 1)) % sug.items.length);
+            }
             if (e.key === "ArrowUp" && hist.length) {
               const i = hi < 0 ? hist.length - 1 : Math.max(0, hi - 1);
               setHi(i);
@@ -155,8 +208,11 @@ export function CommandBar() {
           }}
           autoComplete="off"
           spellCheck={false}
+          aria-autocomplete="list"
+          aria-controls="cmd-suggestions"
         />
       </form>
+      {sug.hint && v.trim() && !popup && <div className="cmd-syntax mono">{sug.hint}</div>}
     </footer>
   );
 }
@@ -170,10 +226,23 @@ export function StatusBar() {
   const user = useStore((s) => s.user);
   const cursor = useStatus((s) => s.cursor);
   const view = useStatus((s) => s.view);
+  const it = useStatus((s) => s.it);
+  const hidden = useStore((s) => s.hidden);
+  const set = useStore((s) => s.set);
   const hard = (model.clashes ?? []).filter((c) => c.hard).length;
   return (
     <div className="statusbar" role="status">
       <span className="sb-msg">{tool !== "select" && prompt ? prompt : "Ready"}</span>
+      {hidden.length > 0 && (
+        <button type="button" className="sb-cell sb-link" onClick={() => set({ hidden: [] })} title="Show everything again (show all)">
+          {hidden.length} hidden · show all
+        </button>
+      )}
+      {it && (
+        <span className="sb-cell" title='"it" in commands refers to this'>
+          it = {it.length > 30 ? `${it.slice(0, 29)}…` : it}
+        </span>
+      )}
       <span className="sb-cell mono" title="Cursor position on the working plane">{cursor || "E — N — U —"}</span>
       <span className="sb-cell">{view}</span>
       <span className="sb-cell">mm</span>
@@ -241,7 +310,7 @@ export function Help() {
             <li>Click a free nozzle, a line's open end, or the grid</li>
             <li>Move along an axis: the pipe, elbows and flanges preview live from the spec</li>
             <li>It snaps to 50 mm and to nozzle alignments (hold Shift for free length)</li>
-            <li>Click to add a bend, or type <code>E 2000</code>, <code>U 1500</code>, <code>S 800</code></li>
+            <li>Click to add a bend, or type <code>east 2000</code>, <code>up 1500</code>, <code>s800</code>, then <code>to E-101.N1</code> or <code>finish</code></li>
             <li>Hover a free nozzle to see an auto-route to it, click to finish there</li>
             <li>Enter finishes with an open end, Shift+Enter with a flange, Backspace removes a point</li>
           </ul>
@@ -254,7 +323,7 @@ export function Help() {
           </ul>
         </section>
         <section>
-          <h3>Command line</h3>
+          <h3>Commands (English or عربي) - type help or help &lt;command&gt; in the Command Window</h3>
           <ul className="mono small">
             {HELP.map((h) => (
               <li key={h}>{h}</li>

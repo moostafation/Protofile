@@ -14,6 +14,8 @@ export interface Toast {
   kind: "ok" | "error" | "info";
 }
 
+export type LogKind = "in" | "out" | "error" | "ok";
+
 export type CommitKind = "load" | "apply" | "undo" | "redo" | "remote";
 export type CommitListener = (doc: PlantDoc, label: string, kind: CommitKind, prev: PlantDoc, by?: string) => void;
 /** Subscribers to committed transactions (the plant database, the shared-database sync). */
@@ -52,7 +54,7 @@ export interface State {
   clearance: number;
   workingZ: number;
   section: { lo: [number, number, number]; hi: [number, number, number] } | null;
-  log: { text: string; kind: "in" | "out" | "error" }[];
+  log: { text: string; kind: LogKind }[];
   toasts: Toast[];
   savedAt: number | null;
   dirty: boolean;
@@ -67,6 +69,8 @@ export interface State {
   dbRev: number;
   peopleRev: number;
   colorBy: "line" | "status";
+  /** Objects hidden from the 3D view (hide / isolate commands). */
+  hidden: string[];
   shared: SharedInfo | null;
 }
 
@@ -85,7 +89,7 @@ export interface Actions {
   setTool(tool: ToolId, opts?: Partial<Pick<State, "template" | "inlineType">>): void;
   set(patch: Partial<State>): void;
   toast(text: string, kind?: Toast["kind"]): void;
-  logLine(text: string, kind?: "in" | "out" | "error"): void;
+  logLine(text: string, kind?: LogKind): void;
   rerunClash(): void;
 }
 
@@ -130,6 +134,7 @@ export const useStore = create<State & Actions>((set, get) => ({
   dbRev: 0,
   peopleRev: 0,
   colorBy: "line",
+  hidden: [],
   shared: null,
 
   load(doc, label = "Opened") {

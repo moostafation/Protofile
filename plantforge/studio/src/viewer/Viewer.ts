@@ -78,6 +78,7 @@ export class Viewer {
   private ghostMat = new THREE.MeshStandardMaterial({ color: "#5fd0ff", transparent: true, opacity: 0.6, depthWrite: false, emissive: "#1a8fd0", emissiveIntensity: 0.5 });
   private ghostBadMat = new THREE.MeshStandardMaterial({ color: "#ff6a5a", transparent: true, opacity: 0.55, depthWrite: false, emissive: "#c0261a", emissiveIntensity: 0.5 });
   private selected = new Set<string>();
+  private hidden = new Set<string>();
   private hovered: string | null = null;
   private clashUids = new Set<string>();
   private showClashes = true;
@@ -288,7 +289,19 @@ export class Viewer {
     this.drawErrors(model);
     this.buildLabels(model);
     this.updateGrid();
+    this.applyHidden();
     this.repaint();
+  }
+
+  /** Hide objects (by owner id) from the view and from picking. */
+  setHidden(ids: Set<string>) {
+    this.hidden = ids;
+    this.applyHidden();
+    this.touch();
+  }
+
+  private applyHidden() {
+    for (const [k, rec] of this.owners) rec.group.visible = !this.hidden.has(k.slice(k.indexOf(":") + 1));
   }
 
   private disposeGroup(g: THREE.Group) {
@@ -462,6 +475,7 @@ export class Viewer {
     const hits = this.ray.intersectObjects(this.root.children, true);
     for (const h of hits) {
       if (this.section && !this.section.containsPoint(h.point)) continue;
+      if (h.object.parent && !h.object.parent.visible) continue;
       const uid = h.object.userData.uid as string | undefined;
       if (!uid) continue;
       const c = this.compsByUid.get(uid);

@@ -22,11 +22,37 @@
   - **Model Explorer** بشجرة E3D: WORLD ← SITE ← ZONE ← EQUI / PIPE ← BRAN ← ELBO و FLAN و VALV...
   - **Attributes** على شكل Property grid.
   - **Command Window** و Status bar فيه الإحداثيات.
-- **أوامر بأسلوب E3D:** `/P-101A` بتخلّي العنصر هو الـ Current element، و `CE` و `Q POS` و `Q ATT`، و `AT E 1000 N 2000 U 0` و `BY E 500`.
+- **لغة أوامر خاصة بالبرنامج:** شوف القسم اللي تحت.
 
 ![](../docs/img/studio_3d.png)
 
 ![](../docs/img/studio_column.png)
+
+## لغة الأوامر
+
+لغة أوامر خاصة بـ PlantForge، والأمر بيتكتب زي جملة، بالإنجليزي أو بالعربي. المرجع الكامل في [docs/COMMANDS.md](../docs/COMMANDS.md).
+
+```
+add pump P-102 at V-101 south 6000 rot 90
+connect P-102.N2 to E-101.N1
+route from V-101.N2 down 1500 east 3000 to P-101A.N2
+set lines where nps>=6 color=blue
+isolate C-201 and lines where fluid='Overhead vapour'
+ضيف طلمبة عند 5000,3000 ثم لف ده 180
+```
+
+- **مراجع سهلة:**
+  - النوزل `P-101A.N2`، والتي `P-1002.T1`، والبلف `P-1002.V1`.
+  - `it` لآخر حاجة اتعملت.
+  - مجموعات زي `pumps` و `lines`، وفلاتر زي `where nps>=6`.
+- **إنشاء وتعديل:** معدات بمقاساتها، ونسخ متكررة `x3`، وبلوف و Tees في أي مكان على الخط، ونوزلات، و Systems، وخصائص لمجموعة كاملة مرة واحدة.
+- **مواسير:** توصيل تلقائي بين نوزلين، أو رسم بخطوات `east 2000 up 1500` لحد نوزل.
+- **أسئلة:** `info` و `list` و `count` و `measure` (المسافة والخلوص)، و `check` و `sql` و `report`.
+- **عرض:** `find` و `isolate` و `hide` و `show all` و `section` و `color by status`.
+- **إنتاجية:** تسلسل بـ `then`، و `again`، و Macros بمتغيرات `$1`.
+- **مساعدة وانت بتكتب:** Tab بيكمّل، والاقتراحات بتفهم السياق (مثلاً بعد `connect … to` بتقترح نوزلات من نفس المقاس الأول). ولو كتبت غلط، البرنامج بيقولك "Did you mean …".
+
+![](../docs/img/studio_commands.png)
 
 ## المميزات
 
@@ -44,7 +70,7 @@
 | **MTO و Line list** | بيتحدّثوا لحظياً، ومعاهم عدد اللحامات والـ Inch-dia |
 | **مساعد ذكاء اصطناعي** | اكتب له بالعربي أو الإنجليزي، زي: "ضيف طلمبة احتياطي ووصّلها". هو بيحط المعدات ويوصّل ويضيف البلوف ويعمل Clash check، وكل خطوة ليها Undo |
 | **حفظ وتصدير** | حفظ في حسابك على Claude، وحفظ تلقائي في المتصفح. وتصدير Zip فيه PCF و DXF و SVG و MTO و JSON و TOML (لملفات IFC عن طريق محرك Python) |
-| **Command Window** | `HELP` · `CONNECT A/N1 B/N2` · `NEW PUMP AT E 0 N 0` · `MOVE P-101A E 500` · `REROUTE` · `ISO` · `CLASH 50`، وكمان أوامر E3D: `/NAME` و `Q POS` و `Q ATT` و `AT` و `BY` |
+| **Command Window** | لغة أوامر PlantForge بالإنجليزي أو بالعربي، مع اقتراحات وانت بتكتب (شوف [لغة الأوامر](#لغة-الأوامر)) |
 | **مراجعة** | View cube، و Iso من الأربع اتجاهات، و Plan و Elevations، و Section box، و Measure، و Labels، و Color by status، و Undo/Redo بلا حدود |
 | **المثال الجاهز** | وحدة Feed و Stripper فيها 9 معدات و 15 خط، وكلها متوصلة بالـ Auto-router من غير ولا Clash: Surge drum وطلمبتين، ومبادل، و Stripper column ارتفاعه 21 m، و Reflux drum وطلمبتين، وتانك، و Pipe rack بدورين |
 
@@ -91,7 +117,7 @@
 cd plantforge/studio
 npm install
 npm run dev        # تطوير على http://localhost:5173
-npm test           # 28 اختبار للمحرك وقاعدة البيانات
+npm test           # 39 اختبار للمحرك وقاعدة البيانات ولغة الأوامر
 npm run build      # dist/plantforge-studio.html (ملف واحد) + dist/artifact.html
 ```
 
@@ -109,6 +135,7 @@ src/db/        قاعدة البيانات
   PlantDB            حفظ وقراءة الموديل والكتالوج، و SQL، و Bulkload، و Backup
   service            ربط الداتابيز بالبرنامج (كل Transaction بتتسجل)
   shared             المصنع المشترك: مزامنة لايف، و Leases، و Version check
+src/cmd/       لغة الأوامر: lexer و vocab (إنجليزي + عربي) و world و reader و commands و run و complete
 src/viewer/    three.js: المشهد، والأدوات (Route، Insert، Move، Place، Measure)، والـ View cube
 src/app/       React: الواجهة، والـ Command line، والـ Store (Undo/Redo)
 src/assistant/ أدوات المساعد الذكي

@@ -265,7 +265,7 @@ export function routeTool(ctx: ToolCtx, init?: Draft): Tool {
   const prompt = () =>
     S().set({
       prompt: draft
-        ? "Move along an axis and click to add a bend · type E 2000 / U 1500 · click a free nozzle to finish there (auto-route) · Enter finishes · Backspace undoes a point"
+        ? "Move along an axis and click to add a bend · type east 2000 / up 1500 · click a free nozzle to finish there (auto-route) · Enter finishes · Backspace undoes a point"
         : "Click a free nozzle, the open end of a line, or a point on the grid to start a pipe",
     });
   prompt();

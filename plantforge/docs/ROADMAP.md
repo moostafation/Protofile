@@ -109,6 +109,26 @@ flowchart TB
 | **5: الشغل الجماعي** (3-6 شهور) | Server (FastAPI + PostgreSQL)، وصلاحيات، و Claim/Lock، و Revisions، و Web review بتعليقات، ومطابقة P&ID (DEXPI) | فريق كامل على نفس الموديل |
 | **6: التكامل الهندسي** | تصدير للـ Stress، و Line list و Valve list، وربط بالمشتريات | دورة المشروع كاملة |
 
+## 5.1 اللي اتعمل في Studio لحد دلوقتي
+
+- **التصميم:** محرك Routing من الـ Spec، و Auto-router، ومعدات بارامترية، و Racks، و Clash، و MTO، و PCF، وأيزومتريك.
+- **قاعدة البيانات:** SQLite زي SP3D، و Approval، و Transactions، و Shared plant لايف.
+- **الشكل:** 3D وواجهة Desktop.
+- **لغة أوامر خاصة بالبرنامج:** إنجليزي وعربي، ومعاها اقتراحات وانت بتكتب ([docs/COMMANDS.md](COMMANDS.md)).
+
+## 5.2 المرحلة الجاية: نبني على اللي وصلناله
+
+| # | الإضافة | ليه مهمة |
+|---|---|---|
+| 1 | **Reducers وتغيير المقاس:** Concentric و Eccentric، و Reducing tee، وتوصيل نوزلات مختلفة المقاس تلقائي | أي مصنع حقيقي فيه تغيير مقاسات. ودلوقتي `connect` بيرفض لو المقاسات مختلفة |
+| 2 | **Line list ← موديل:** استيراد Line list من Excel أو CSV (رقم الخط، From، To، المقاس، الـ Spec)، والبرنامج يعمل Route لكل الخطوط مرة واحدة | ده بيحوّل الـ P&ID لموديل 3D في دقايق |
+| 3 | **Specs حقيقية:** Class 300 و 600، و Branch tables (Tee أو Olet حسب المقاسين)، و Small-bore SW و Threaded، ومحرر Spec | عشان نشتغل بالـ Spec بتاع الشركة |
+| 4 | **أيزومتريك إنتاج:** تقسيم Spools، وترقيم لحامات، و Cut list، و BOM لكل Spool، و PDF | رسومات تتسلّم للورشة |
+| 5 | **Supports:** Guides و Anchors و Hangers و Trunnions، وفحص الـ Span تلقائي | الدعامات جزء كبير من شغل البايبنج |
+| 6 | **معدات أكتر:** Air cooler، و Compressor، و Fired heater، وعمود بـ Trays، وحديد Platforms بالأوامر | وحدات كاملة |
+| 7 | **Stress:** تصدير لـ CAESAR II (Neutral file) | دورة التصميم كاملة |
+| 8 | **Desktop app:** Tauri أو Electron، وملف SQLite على الجهاز، وشغل Offline | للي عايز برنامج يتسطب |
+
 ## 6. الخطوات الجاية مباشرة (المرحلة 1)
 
 1. Reducers و Swages: بيفتحوا تغيير المقاس داخل الخط وعند النوزلات.

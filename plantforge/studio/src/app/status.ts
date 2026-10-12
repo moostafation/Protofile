@@ -3,4 +3,4 @@
 
 import { create } from "zustand";
 
-export const useStatus = create<{ cursor: string; view: string }>(() => ({ cursor: "", view: "Iso SW" }));
+export const useStatus = create<{ cursor: string; view: string; it: string }>(() => ({ cursor: "", view: "Iso SW", it: "" }));

@@ -789,3 +789,87 @@ body {
     display: none;
   }
 }
+
+/* ---------------------------------------------------------------- command suggestions */
+.cmd-row {
+  position: relative;
+}
+.cmd-sug {
+  position: absolute;
+  left: 22px;
+  bottom: calc(100% + 2px);
+  z-index: 30;
+  min-width: 320px;
+  max-width: min(720px, calc(100vw - 40px));
+  margin: 0;
+  padding: 3px 0;
+  list-style: none;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  box-shadow: var(--shadow);
+}
+.cmd-sug li {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 3px 10px;
+  cursor: default;
+  white-space: nowrap;
+}
+.cmd-sug li.on,
+.cmd-sug li:hover:not(.cmd-sug-hint) {
+  background: var(--sel);
+}
+.cmd-sug .mono {
+  font-size: 12.5px;
+}
+.cmd-sug-detail {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cmd-sug-hint {
+  margin-top: 3px;
+  border-top: 1px solid var(--rule);
+  padding-top: 5px !important;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: normal !important;
+}
+.cmd-syntax {
+  padding: 0 10px 3px 26px;
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cmd-ok {
+  color: var(--ok);
+}
+.cmd-log > div {
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sb-link {
+  border: 0;
+  border-left: 1px solid var(--rule);
+  background: var(--sel);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+.sb-link:hover {
+  background: var(--hover);
+}
+@media (max-width: 880px) {
+  .cmd-sug {
+    left: 0;
+    min-width: 0;
+    width: 100%;
+  }
+}

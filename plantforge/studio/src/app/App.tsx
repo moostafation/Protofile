@@ -46,7 +46,7 @@ export function App() {
         joinShared(sharedPid).catch((e) => st.toast(`Working on a local copy: ${(e as Error).message}`, "info"));
       }
       setProjectIdState(dbHub.projectId);
-      st.logLine("PlantForge Design ready. Type HELP for commands, or /NAME to make an element current.");
+      st.logLine("PlantForge ready. Type a command - help lists them - or just a name to jump to it. Arabic works too: ضيف طلمبة عند 5000,3000");
       setReady(true);
       sampleFn().then((s) => setAssistant(!!s));
     })().catch((e) => {
@@ -82,6 +82,10 @@ export function App() {
       st.toast(code === "quota_exceeded" ? "Your project storage is full - delete an old project in Projects." : "Could not save right now. Your work is kept in this browser.", "error");
     }
   }, [projectId]);
+
+  useEffect(() => {
+    hub.save = () => void save();
+  }, [save]);
 
   // keyboard
   useEffect(() => {

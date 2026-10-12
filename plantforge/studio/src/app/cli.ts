@@ -1,225 +1,185 @@
-// Command line (E3D-flavoured). Routing commands go to the active route tool first.
+// The command window: the PlantForge command language (src/cmd) connected to the application -
+// store, viewer, route tool, exporters and the plant database.
 
-import { findByName, nozzleRefByName } from "../assistant/assistant";
-import { addEquipment, autoConnect, deleteObject, moveEquipment, reroute } from "../engine/commands";
-import type { TemplateId } from "../engine/doc";
-import { normalizeNps } from "../engine/catalog";
-import { fmtENU } from "../engine/vec";
+import type { Env } from "../cmd/commands";
+import { COMMANDS } from "../cmd/commands";
+import { Suggestions, suggest } from "../cmd/complete";
+import { execute, newSession } from "../cmd/run";
+import { Ref, World } from "../cmd/world";
+import { databaseZip, reportsZip } from "../db/files";
+import { dbHub } from "../db/service";
+import { saveFile } from "../platform/claude";
+import type { V3 } from "../engine/vec";
+import type { ViewName } from "../viewer/Viewer";
+import { exportCurrent, exportLine } from "./exporters";
+import { useStatus } from "./status";
 import { useStore } from "./store";
 
 const S = () => useStore.getState();
 
-const TEMPLATE_WORDS: Record<string, TemplateId> = {
-  PUMP: "pump",
-  VESSEL: "vvessel",
-  VVESSEL: "vvessel",
-  COLUMN: "vvessel",
-  DRUM: "hdrum",
-  HDRUM: "hdrum",
-  EXCHANGER: "exchanger",
-  HX: "exchanger",
-  TANK: "tank",
-};
-
-export const HELP = [
-  "E 2000 · N 1500 · U 1000 · W/S/D …   add a leg while routing (mm)",
-  "TO V-101/N1                          finish the route at a nozzle (auto-route)",
-  "FINISH · FLANGED                     end the route open / with a flange",
-  "ROUTE [P-101A/N2]                    start routing (optionally from a nozzle)",
-  "CONNECT P-101A/N2 E-101/N1           auto-route a new line between two nozzles",
-  "NEW PUMP|VESSEL|DRUM|EXCHANGER|TANK [TAG] AT E 5000 N 3000",
-  "MOVE P-101A E 500 · MOVE P-101A TO E 4000 N 6000",
-  "ROTATE P-101A 90 · DELETE P-101B · REROUTE 4\"-P-1002",
-  "NPS 6 · SPEC A1A · EL 3500 (working elevation for new routes)",
-  "CLASH [clearance mm] · ISO <line> · GOTO <tag> · UNDO · REDO · HELP",
-  "E3D style: /V-101 (make it the current element) · CE · Q POS · Q ATT · AT E 1000 N 2000 U 0 · BY E 500",
-];
+/** One line per command for the help dialog. */
+export const HELP = COMMANDS.filter((c) => c.verb !== "flanged" && c.verb !== "again").map((c) => c.syntax);
 
 export interface CliHooks {
   routeCommand(text: string): boolean;
   startRoute(fromNozzle?: string): void;
   goto(uids: string[]): void;
   setWorkingZ(z: number): void;
+  fit(uids: string[] | null): void;
+  view(name: ViewName): void;
+  sectionAround(uids: string[]): void;
+  save(): void;
 }
 
-function coords(tokens: string[]): { e?: number; n?: number; z?: number } {
-  const out: { e?: number; n?: number; z?: number } = {};
-  for (let i = 0; i < tokens.length - 1; i++) {
-    const k = tokens[i].toUpperCase();
-    const v = Number(tokens[i + 1]);
-    if (Number.isNaN(v)) continue;
-    if (k === "E") out.e = v;
-    if (k === "W") out.e = -v;
-    if (k === "N") out.n = v;
-    if (k === "S") out.n = -v;
-    if (k === "EL" || k === "U") out.z = v;
-    if (k === "D") out.z = -v;
+// ------------------------------------------------------------------ macros (kept in this browser)
+const MACRO_KEY = "plantforge.macros.v1";
+function loadMacros(): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem(MACRO_KEY) ?? "{}") ?? {};
+  } catch {
+    return {};
   }
-  return out;
 }
+function saveMacros(m: Record<string, string>) {
+  try {
+    localStorage.setItem(MACRO_KEY, JSON.stringify(m));
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+const session = newSession(loadMacros());
+const typed: string[] = [];
+
+const uidsOf = (refs: Ref[]) => {
+  const ids = new Set(refs.map((r) => r.id));
+  return S().model.comps.filter((c) => ids.has(c.owner.id)).map((c) => c.uid);
+};
+
+function selectionRefs(): Ref[] {
+  const st = S();
+  const w = new World(st.doc, st.model);
+  const owners = new Map<string, Ref>();
+  const add = (type: Ref["type"], id: string) => {
+    const r = w.all().find((q) => q.id === id && q.type === type);
+    if (r) owners.set(id, r);
+  };
+  for (const u of st.selection) {
+    const c = st.model.byUid.get(u);
+    if (c) add(c.owner.type, c.owner.id);
+  }
+  if (st.focus) add(st.focus.type, st.focus.id);
+  return [...owners.values()];
+}
+
+const DIR_LETTER = (d: V3, mm: number): [string, number] => {
+  const [x, y, z] = d;
+  const s = Math.sign(mm) || 1;
+  const letter = x * s > 0.5 ? "E" : x * s < -0.5 ? "W" : y * s > 0.5 ? "N" : y * s < -0.5 ? "S" : z * s > 0.5 ? "U" : "D";
+  return [letter, Math.abs(mm)];
+};
+
+function makeEnv(hooks: CliHooks): Env {
+  const offer = async (filename: string, data: Blob) => {
+    const r = await saveFile(filename, data);
+    S().logLine(r === "saved" ? `Saved ${filename}` : r === "declined" ? "Download declined" : "Downloads are not available in this view", r === "saved" ? "ok" : "error");
+  };
+  return {
+    doc: () => S().doc,
+    model: () => S().model,
+    user: () => S().user,
+    selection: selectionRefs,
+    apply: (doc, label) => S().apply(doc, label),
+    select: (refs, frame) => {
+      const uids = uidsOf(refs);
+      S().select(uids, refs.length ? { type: refs[0].type, id: refs[0].id } : null);
+      if (frame && uids.length) hooks.goto(uids);
+    },
+    out: (text, kind) => S().logLine(text, kind ?? "out"),
+    newLine: () => S().newLine,
+    view: (name) => hooks.view(name as ViewName),
+    fit: (refs) => hooks.fit(refs ? uidsOf(refs) : null),
+    visibility: (mode, ids) => {
+      const st = S();
+      const all = [...st.doc.equipment, ...st.doc.lines, ...st.doc.structures].map((o) => o.id);
+      const hidden = new Set(st.hidden);
+      if (mode === "all") hidden.clear();
+      else if (mode === "hide") ids.forEach((i) => hidden.add(i));
+      else if (mode === "show") ids.forEach((i) => hidden.delete(i));
+      else {
+        hidden.clear();
+        all.filter((i) => !ids.includes(i)).forEach((i) => hidden.add(i));
+      }
+      st.set({ hidden: [...hidden] });
+    },
+    colorBy: (mode) => S().set({ colorBy: mode }),
+    labels: (on) => S().set({ labels: on ?? !S().labels }),
+    section: (refs) => (refs ? hooks.sectionAround(uidsOf(refs)) : S().set({ section: null })),
+    clash: (cl) => {
+      if (cl !== null) S().set({ clearance: Math.max(0, cl) });
+      S().rerunClash();
+      S().set({ panel: "clash" });
+      return S().model.clashes ?? [];
+    },
+    undo: (n) => {
+      for (let i = 0; i < n; i++) S().undo();
+    },
+    redo: (n) => {
+      for (let i = 0; i < n; i++) S().redo();
+    },
+    iso: (id) => S().set({ isoLine: id }),
+    exportFile: (kind, ref) => {
+      const db = dbHub.db;
+      if (kind === "sqlite" || kind === "reports") {
+        if (!db) return S().logLine("The database is not open", "error");
+        const f = (kind === "sqlite" ? databaseZip : reportsZip)(db, S().doc.project.name);
+        return void offer(f.filename, f.blob);
+      }
+      if (kind === "zip" && ref) return void exportLine(ref.id, "zip");
+      void exportCurrent(kind as "zip" | "csv" | "json" | "toml" | "png");
+    },
+    save: () => hooks.save(),
+    sql: (q) => {
+      if (!dbHub.db) throw new Error("The database is not open");
+      return dbHub.db.query(q, 200);
+    },
+    routing: () => S().tool === "route",
+    routeStep: (dir, mm) => {
+      const [l, d] = DIR_LETTER(dir, mm);
+      if (!hooks.routeCommand(`${l} ${d}`)) S().logLine("Start the pipe first: click a nozzle or a point", "error");
+    },
+    routeTo: (end) => {
+      if (end.ref.kind !== "nozzle") return S().logLine("While drawing, finish at a nozzle; for a tee branch use connect", "error");
+      const eq = S().doc.equipment.find((e) => e.id === (end.ref as { eq: string }).eq)!;
+      hooks.routeCommand(`TO ${eq.tag}/${(end.ref as { nozzle: string }).nozzle}`);
+    },
+    routeFinish: (flanged) => void hooks.routeCommand(flanged ? "FLANGED" : "FINISH"),
+    startRoute: (from) => {
+      if (from?.ref.kind === "nozzle") {
+        const eq = S().doc.equipment.find((e) => e.id === (from.ref as { eq: string }).eq)!;
+        hooks.startRoute(`${eq.tag}/${(from.ref as { nozzle: string }).nozzle}`);
+      } else hooks.startRoute();
+    },
+    history: () => typed,
+    clear: () => S().set({ log: [] }),
+  };
+}
+
+let env: Env | null = null;
 
 export function runCommand(raw: string, hooks: CliHooks): void {
-  const typed = raw.trim();
-  if (!typed) return;
+  const text = raw.trim();
+  if (!text) return;
+  env ??= makeEnv(hooks);
+  S().logLine(text, "in");
+  typed.push(text);
+  execute(text, env, session);
+  saveMacros(session.macros);
+  useStatus.setState({ it: session.it.map((r) => r.name).join(", ") });
+}
+
+/** Suggestions for the command window while typing. */
+export function suggestFor(text: string): Suggestions {
   const st = S();
-  st.logLine(typed, "in");
-  // E3D-style navigation: "/NAME" makes the element current (CE) and frames it
-  const text = typed.startsWith("/") ? `GOTO ${typed.slice(1)}` : typed;
-  const say = (t: string) => st.logLine(t);
-  const fail = (t: string) => st.logLine(t, "error");
-  if (hooks.routeCommand(text)) return;
-  const tokens = text.split(/\s+/);
-  const cmd = tokens[0].toUpperCase();
-  const ce = () => {
-    const f = st.focus;
-    if (!f) return null;
-    const list = f.type === "equipment" ? st.doc.equipment : f.type === "line" ? st.doc.lines : st.doc.structures;
-    return { f, obj: (list as { id: string }[]).find((o) => o.id === f.id) as Record<string, any> | undefined };
-  };
-  const TYPE = { equipment: "EQUI", line: "PIPE", structure: "STRU" } as const;
-  try {
-    switch (cmd) {
-      case "CE": {
-        const c = ce();
-        if (!c?.obj) return fail("No current element: select one, or type /NAME");
-        return say(`${TYPE[c.f.type]} /${c.obj.tag ?? c.obj.number}`);
-      }
-      case "Q": {
-        const c = ce();
-        if (!c?.obj) return fail("No current element: select one, or type /NAME");
-        const what = (tokens[1] ?? "ATT").toUpperCase();
-        const o = c.obj;
-        const name = `/${o.tag ?? o.number}`;
-        if (what === "POS") {
-          if (c.f.type === "equipment") return say(`Position ${fmtENU(o.origin)} WRT /*`);
-          const r = S().model.lines.get(o.id);
-          if (r?.path.length) return say(`Head ${fmtENU(r.path[0])} · Tail ${fmtENU(r.path[r.path.length - 1])}`);
-          return say(`${name} has no position`);
-        }
-        if (what === "NAME") return say(name);
-        if (what === "TYPE") return say(TYPE[c.f.type]);
-        const m = o.meta ?? {};
-        const lines = [`${TYPE[c.f.type]} ${name}`, `  Description ${o.description || o.fluid || "-"}`];
-        if (c.f.type === "equipment") lines.push(`  Position ${fmtENU(o.origin)}`, `  Orientation rotated ${o.rot} deg about U`, `  Template ${o.template}`, `  Nozzles ${o.nozzles.map((n: { name: string; nps: string }) => `${n.name} ${n.nps}"`).join(", ")}`);
-        if (c.f.type === "line") lines.push(`  Pspec /${o.spec}`, `  Bore ${o.nps}"`, `  Head ${o.start.kind === "nozzle" ? "nozzle" : o.start.kind} · Tail ${o.end.kind === "nozzle" ? "nozzle" : o.end.kind}`);
-        lines.push(`  Status ${m.status ?? "Working"} · Rev ${m.rev ?? 1} · Group ${m.group ?? "-"}`);
-        lines.forEach(say);
-        return;
-      }
-      case "AT":
-      case "BY": {
-        const c = ce();
-        if (!c?.obj || c.f.type !== "equipment") return fail(`${cmd} works on equipment: make one current first (/P-101A)`);
-        const k = coords(tokens.slice(1));
-        const o = c.obj.origin as [number, number, number];
-        const to: [number, number, number] = cmd === "AT" ? [k.e ?? o[0], k.n ?? o[1], k.z ?? o[2]] : [o[0] + (k.e ?? 0), o[1] + (k.n ?? 0), o[2] + (k.z ?? 0)];
-        if (!st.apply(moveEquipment(st.doc, c.f.id, to, c.obj.rot), `Move ${c.obj.tag}`)) return;
-        return say(`/${c.obj.tag} at ${fmtENU(to)}`);
-      }
-      case "HELP":
-      case "?":
-        HELP.forEach(say);
-        return;
-      case "UNDO":
-        return st.undo();
-      case "REDO":
-        return st.redo();
-      case "ROUTE":
-        return hooks.startRoute(tokens[1]);
-      case "NPS": {
-        const nps = normalizeNps(tokens[1]);
-        st.set({ newLine: { ...st.newLine, nps } });
-        return say(`New lines: NPS ${nps}`);
-      }
-      case "SPEC":
-        st.set({ newLine: { ...st.newLine, spec: tokens[1].toUpperCase() } });
-        return say(`New lines: spec ${tokens[1].toUpperCase()}`);
-      case "EL": {
-        const z = Number(tokens[1]);
-        if (Number.isNaN(z)) return fail("EL needs a number, e.g. EL 3500");
-        hooks.setWorkingZ(z);
-        return say(`Working elevation EL ${z >= 0 ? "+" : ""}${z}`);
-      }
-      case "CONNECT": {
-        const a = nozzleRefByName(tokens[1] ?? "");
-        const b = nozzleRefByName(tokens[2] ?? "");
-        if (!a || !b) return fail("CONNECT needs two nozzles: CONNECT P-101A/N2 E-101/N1");
-        const res = autoConnect(st.doc, { from: a, to: b, spec: st.newLine.spec, fluid: st.newLine.fluid });
-        if (res.error || !res.lineId) return fail(res.error ?? "no route");
-        const number = res.doc.lines.find((l) => l.id === res.lineId)!.number;
-        st.apply(res.doc, `Auto-route ${number}`);
-        return say(`${number}: ${res.info}`);
-      }
-      case "NEW": {
-        const t = TEMPLATE_WORDS[(tokens[1] ?? "").toUpperCase()];
-        if (!t) return fail("NEW PUMP | VESSEL | DRUM | EXCHANGER | TANK");
-        const tag = tokens[2] && tokens[2].toUpperCase() !== "AT" ? tokens[2].toUpperCase() : undefined;
-        const c = coords(tokens);
-        const [doc, id] = addEquipment(st.doc, t, [c.e ?? 0, c.n ?? 0, 0], 0, tag);
-        const eq = doc.equipment.find((e) => e.id === id)!;
-        st.apply(doc, `Add ${eq.tag}`);
-        st.select([`${id}/BODY`], { type: "equipment", id });
-        hooks.goto([`${id}/BODY`]);
-        return say(`Placed ${eq.tag} at ${fmtENU(eq.origin)}`);
-      }
-      case "MOVE":
-      case "ROTATE": {
-        const f = findByName(tokens[1] ?? "");
-        if (!f || f.type !== "equipment") return fail(`No equipment ${tokens[1] ?? ""}`);
-        const eq = st.doc.equipment.find((e) => e.id === f.id)!;
-        let origin = eq.origin;
-        let rot = eq.rot;
-        if (cmd === "ROTATE") rot = (eq.rot + Number(tokens[2] ?? 90)) % 360;
-        else if ((tokens[2] ?? "").toUpperCase() === "TO") {
-          const c = coords(tokens.slice(3));
-          origin = [c.e ?? origin[0], c.n ?? origin[1], c.z ?? origin[2]];
-        } else {
-          const c = coords(tokens.slice(2));
-          origin = [origin[0] + (c.e ?? 0), origin[1] + (c.n ?? 0), origin[2] + (c.z ?? 0)];
-        }
-        st.apply(moveEquipment(st.doc, f.id, origin, rot), `${cmd === "MOVE" ? "Move" : "Rotate"} ${eq.tag}`);
-        const broken = [...S().model.lines.values()].filter((l) => l.error).map((l) => l.doc.number);
-        return say(`${eq.tag} at ${fmtENU(origin)}, rotation ${rot}°${broken.length ? ` · could not follow: ${broken.join(", ")} (try REROUTE)` : ""}`);
-      }
-      case "DELETE": {
-        const f = findByName(tokens.slice(1).join(" "));
-        if (!f) return fail(`Nothing called ${tokens.slice(1).join(" ")}`);
-        st.apply(deleteObject(st.doc, f), `Delete ${f.label}`);
-        return say(`Deleted ${f.label}`);
-      }
-      case "REROUTE": {
-        const f = findByName(tokens.slice(1).join(" "));
-        if (!f || f.type !== "line") return fail("REROUTE needs a line number");
-        const r = reroute(st.doc, f.id);
-        if (r.error) return fail(r.error);
-        st.apply(r.doc, `Re-route ${f.label}`);
-        return say(r.info ?? "Re-routed");
-      }
-      case "CLASH": {
-        const cl = Number(tokens[1] ?? 0) || 0;
-        st.set({ clearance: cl });
-        st.rerunClash();
-        const c = S().model.clashes ?? [];
-        st.set({ panel: "clash" });
-        return say(`${c.filter((x) => x.hard).length} hard clashes${cl ? `, ${c.filter((x) => !x.hard).length} within ${cl} mm` : ""}`);
-      }
-      case "ISO": {
-        const f = findByName(tokens.slice(1).join(" ") || "");
-        const id = f?.type === "line" ? f.id : st.focus?.type === "line" ? st.focus.id : null;
-        if (!id) return fail("ISO needs a line number (or select a line)");
-        return st.set({ isoLine: id });
-      }
-      case "GOTO": {
-        const f = findByName(tokens.slice(1).join(" "));
-        if (!f) return fail(`Nothing called ${tokens.slice(1).join(" ")}`);
-        const uids = S().model.comps.filter((c) => c.owner.id === f.id).map((c) => c.uid);
-        st.select(uids, { type: f.type, id: f.id });
-        return hooks.goto(uids);
-      }
-      default:
-        return fail(`Unknown command ${cmd}. Type HELP.`);
-    }
-  } catch (e) {
-    fail((e as Error).message);
-  }
+  return suggest(text, new World(st.doc, st.model, session.it, selectionRefs()), session.macros);
 }
