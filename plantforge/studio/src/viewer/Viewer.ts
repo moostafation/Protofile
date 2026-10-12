@@ -1,32 +1,36 @@
 // three.js scene manager: model meshes, selection, ghosts for tools, view cube, section box, labels.
+// Look: graduated navy background, camera headlight, painted finishes and ambient occlusion that
+// settles in as soon as the view stops moving (fast plain frames while orbiting).
 
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
-import { CSS2DObject, CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { GTAOPass } from "three/examples/jsm/postprocessing/GTAOPass.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { CSS2DObject, CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import type { Clash } from "../engine/clash";
 import type { Model } from "../engine/compute";
 import type { Comp } from "../engine/model";
 import type { V3 } from "../engine/vec";
-import { MM, shapeMesh, v } from "./meshes";
+import { MM, mergeAll, shapeGeometry, shapeMesh, v } from "./meshes";
+import { Background, FINISHES, LINE_COLORS, STATUS_COLORS, backgroundTexture } from "./palette";
+
+export { LINE_COLORS };
 
 export interface Hit {
   uid: string;
   point: V3;
 }
 
-export const LINE_COLORS = ["#3a78c4", "#2f9a63", "#b5602f", "#16999a", "#8a5cc4", "#c4507a", "#8f9a2e", "#d18a12"];
-const EQUIP_COLORS: Record<string, string> = { pump: "#5d8db0", vvessel: "#c6cfd6", hdrum: "#c6cfd6", exchanger: "#a9bccb", tank: "#d4dbe0" };
-const STEEL = "#c39a3a";
-const STATUS_COLORS: Record<string, string> = { Working: "#9aa6b0", "In Review": "#e0a21a", Approved: "#2f9e5f", Rejected: "#d6453d" };
-const SUPPORT = "#6f7b85";
-
-export type ViewName = "iso" | "iso-sw" | "iso-nw" | "plan" | "north" | "south" | "east" | "west";
+export type ViewName = "iso" | "iso-sw" | "iso-nw" | "iso-ne" | "plan" | "north" | "south" | "east" | "west";
 const VIEW_DIRS: Record<ViewName, [number, number, number]> = {
   iso: [1, -1, 0.82],
   "iso-sw": [-1, -1, 0.78],
   "iso-nw": [-1, 1, 0.82],
+  "iso-ne": [1, 1, 0.82],
   plan: [0, -0.0001, 1],
   north: [0, -1, 0.0001], // looking north (camera on the south side)
   south: [0, 1, 0.0001],
@@ -47,27 +51,32 @@ const ownerKey = (c: Comp) => `${c.owner.type}:${c.owner.id}`;
 export class Viewer {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
-  readonly camera = new THREE.PerspectiveCamera(40, 1, 0.05, 4000);
+  /** Tool overlays (ghosts, guides, gizmo, markers): drawn on top, kept out of the occlusion pass. */
+  private top = new THREE.Scene();
+  readonly camera = new THREE.PerspectiveCamera(38, 1, 0.05, 6000);
   readonly controls: OrbitControls;
   readonly gizmo: TransformControls;
   readonly gizmoProxy = new THREE.Object3D();
   private labels = new CSS2DRenderer();
+  private composer: EffectComposer;
+  private ao: GTAOPass;
   private root = new THREE.Group();
   private ghost = new THREE.Group();
   private overlay = new THREE.Group();
   private labelGroup = new THREE.Group();
   private grid = new THREE.Group();
-  private sun = new THREE.DirectionalLight(0xffffff, 2.2);
+  private headlight = new THREE.DirectionalLight(0xffffff, 1.35);
+  private key = new THREE.DirectionalLight(0xfff4e6, 0.85);
   private owners = new Map<string, { sig: string; group: THREE.Group }>();
   private meshesByUid = new Map<string, THREE.Mesh[]>();
   private compsByUid = new Map<string, Comp>();
   private baseMat = new Map<THREE.Mesh, THREE.Material>();
   private mats = new Map<string, THREE.MeshStandardMaterial>();
-  private selectMat = new THREE.MeshStandardMaterial({ color: "#ffb21a", emissive: "#ff9a00", emissiveIntensity: 0.45, metalness: 0.2, roughness: 0.4 });
-  private hoverMat = new THREE.MeshStandardMaterial({ color: "#9fd3ff", emissive: "#2f8fe0", emissiveIntensity: 0.35, metalness: 0.2, roughness: 0.45 });
-  private clashMat = new THREE.MeshStandardMaterial({ color: "#ff4b3e", emissive: "#d01a10", emissiveIntensity: 0.55, metalness: 0.1, roughness: 0.5 });
-  private ghostMat = new THREE.MeshStandardMaterial({ color: "#46c1ff", transparent: true, opacity: 0.55, depthWrite: false, emissive: "#1a7fc0", emissiveIntensity: 0.4 });
-  private ghostBadMat = new THREE.MeshStandardMaterial({ color: "#ff6a5a", transparent: true, opacity: 0.5, depthWrite: false, emissive: "#c0261a", emissiveIntensity: 0.4 });
+  private selectMat = new THREE.MeshStandardMaterial({ color: "#3ff0ff", emissive: "#00c2e0", emissiveIntensity: 0.55, metalness: 0.1, roughness: 0.35 });
+  private hoverMat = new THREE.MeshStandardMaterial({ color: "#b8ecff", emissive: "#3aa8ff", emissiveIntensity: 0.4, metalness: 0.1, roughness: 0.4 });
+  private clashMat = new THREE.MeshStandardMaterial({ color: "#ff4b3e", emissive: "#e0160c", emissiveIntensity: 0.6, metalness: 0.1, roughness: 0.5 });
+  private ghostMat = new THREE.MeshStandardMaterial({ color: "#5fd0ff", transparent: true, opacity: 0.6, depthWrite: false, emissive: "#1a8fd0", emissiveIntensity: 0.5 });
+  private ghostBadMat = new THREE.MeshStandardMaterial({ color: "#ff6a5a", transparent: true, opacity: 0.55, depthWrite: false, emissive: "#c0261a", emissiveIntensity: 0.5 });
   private selected = new Set<string>();
   private hovered: string | null = null;
   private clashUids = new Set<string>();
@@ -78,6 +87,12 @@ export class Viewer {
   private anim: number | null = null;
   private cube: ViewCube;
   private section: THREE.Box3 | null = null;
+  private dirty = true;
+  private aoDone = false;
+  private lastChange = 0;
+  private lastCam = new THREE.Matrix4();
+  aoEnabled = true;
+  background: Background = "navy";
   handler: InputHandler | null = null;
   onHover: ((h: Hit | null) => void) | null = null;
   onCursor: ((p: V3 | null) => void) | null = null;
@@ -87,12 +102,10 @@ export class Viewer {
   labelsOn = true;
 
   constructor(private host: HTMLElement) {
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: "high-performance" });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.toneMapping = THREE.NeutralToneMapping;
+    this.renderer.toneMappingExposure = 1.0;
     this.renderer.localClippingEnabled = true;
     host.appendChild(this.renderer.domElement);
     this.renderer.domElement.className = "vp-canvas";
@@ -101,19 +114,18 @@ export class Viewer {
 
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    this.scene.add(new THREE.HemisphereLight(0xdfe9f3, 0x5a5048, 0.9));
-    this.sun.position.set(40, -60, 90);
-    this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(2048, 2048);
-    this.sun.shadow.bias = -0.0004;
-    this.sun.shadow.normalBias = 0.02;
-    this.scene.add(this.sun, this.sun.target);
+    this.scene.environmentIntensity = 0.5;
+    this.scene.background = backgroundTexture(this.background);
+    this.scene.add(new THREE.HemisphereLight(0xe4ecf5, 0x3a4048, 1.15));
+    this.key.position.set(30, -50, 80);
+    this.scene.add(this.key, this.headlight, this.headlight.target);
+    this.top.add(new THREE.HemisphereLight(0xffffff, 0x445566, 2.2));
 
     this.camera.up.set(0, 0, 1);
     this.camera.position.set(60, -60, 50);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
-    this.controls.dampingFactor = 0.12;
+    this.controls.dampingFactor = 0.14;
     this.controls.screenSpacePanning = true;
     this.controls.zoomToCursor = true;
     this.controls.maxPolarAngle = Math.PI;
@@ -121,17 +133,30 @@ export class Viewer {
     this.gizmo = new TransformControls(this.camera, this.renderer.domElement);
     this.gizmo.setTranslationSnap(0.05);
     this.gizmo.setSize(0.9);
-    this.scene.add(this.gizmoProxy);
+    this.top.add(this.gizmoProxy);
     this.gizmo.addEventListener("dragging-changed", (e) => {
       this.controls.enabled = !(e as unknown as { value: boolean }).value;
       if (!(e as unknown as { value: boolean }).value) this.emitGizmo(true);
     });
     this.gizmo.addEventListener("objectChange", () => this.emitGizmo(false));
-    this.scene.add(this.gizmo);
+    this.gizmo.addEventListener("change", () => this.touch());
+    this.top.add(this.gizmo);
 
     this.root.name = "model";
-    this.scene.add(this.root, this.ghost, this.overlay, this.labelGroup, this.grid);
+    this.scene.add(this.root, this.labelGroup, this.grid);
+    this.top.add(this.ghost, this.overlay);
     this.cube = new ViewCube(host, (dir) => this.setView(dir));
+
+    // occlusion pass: multisampled scene, ground-truth AO, tone mapping
+    const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
+    this.composer = new EffectComposer(this.renderer, target);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.ao = new GTAOPass(this.scene, this.camera, 1, 1);
+    this.ao.blendIntensity = 0.85;
+    this.ao.updateGtaoMaterial({ radius: 0.6, distanceExponent: 1.4, thickness: 1.2, scale: 1.1, samples: 16, distanceFallOff: 1 });
+    this.ao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 6, rings: 2, samples: 16 });
+    this.composer.addPass(this.ao);
+    this.composer.addPass(new OutputPass());
 
     const el = this.renderer.domElement;
     el.addEventListener("pointerdown", (e) => this.onDown(e));
@@ -142,16 +167,37 @@ export class Viewer {
       this.setHover(null);
       this.onCursor?.(null);
     });
+    el.addEventListener("webglcontextrestored", () => this.touch());
     new ResizeObserver(() => this.resize()).observe(host);
     this.resize();
     this.renderer.setAnimationLoop(() => this.frame());
+  }
+
+  /** Something on screen changed: draw a new frame. */
+  private touch() {
+    this.dirty = true;
+  }
+
+  setBackground(kind: Background) {
+    if (kind === this.background) return;
+    this.background = kind;
+    (this.scene.background as THREE.Texture | null)?.dispose();
+    this.scene.background = backgroundTexture(kind);
+    this.updateGrid();
+    this.touch();
+  }
+
+  setAmbientOcclusion(on: boolean) {
+    this.aoEnabled = on;
+    this.aoDone = false;
+    this.touch();
   }
 
   // ---------------------------------------------------------------- materials
   private mat(key: string, color: string, opts: Partial<THREE.MeshStandardMaterialParameters> = {}) {
     let m = this.mats.get(key);
     if (!m) {
-      m = new THREE.MeshStandardMaterial({ color, metalness: 0.35, roughness: 0.42, ...opts });
+      m = new THREE.MeshStandardMaterial({ color, metalness: 0.3, roughness: 0.45, ...opts });
       this.mats.set(key, m);
     }
     return m;
@@ -166,24 +212,27 @@ export class Viewer {
     this.setModel(model);
   }
 
-  private materialFor(c: Comp, model: Model): THREE.Material {
+  private finishMat(name: string) {
+    const f = FINISHES[name];
+    return this.mat(`f:${name}`, f.color, { metalness: f.metalness ?? 0.3, roughness: f.roughness ?? 0.45 });
+  }
+
+  /** Material for one shape finish of a component. */
+  private materialFor(c: Comp, finish: string | undefined, model: Model): THREE.Material {
     if (this.colorBy === "status") {
+      if (finish === "concrete" || finish === "concrete8") return this.finishMat("concrete");
       const list = c.owner.type === "equipment" ? model.doc.equipment : c.owner.type === "line" ? model.doc.lines : model.doc.structures;
       const status = (list as { id: string; meta?: { status: string } }[]).find((o) => o.id === c.owner.id)?.meta?.status ?? "Working";
       const col = STATUS_COLORS[status] ?? STATUS_COLORS.Working;
-      return this.mat(`status:${status}`, col, { metalness: 0.25, roughness: 0.5 });
+      return this.mat(`status:${status}`, col, { metalness: 0.2, roughness: 0.5 });
     }
-    if (c.owner.type === "structure") return this.mat("steel", STEEL, { metalness: 0.25, roughness: 0.6 });
-    if (c.owner.type === "equipment") {
-      const t = model.equipment.get(c.owner.id)?.doc.template ?? "vvessel";
-      return this.mat(`eq:${t}`, EQUIP_COLORS[t] ?? "#c6cfd6", { metalness: 0.3, roughness: 0.5 });
-    }
+    if (finish && FINISHES[finish]) return this.finishMat(finish);
+    if (c.owner.type === "structure") return this.finishMat("steel");
+    if (c.owner.type === "equipment") return this.finishMat(c.kind === "NOZZLE" ? "nozzle" : "shell");
     const line = model.lines.get(c.owner.id);
     const col = LINE_COLORS[(line?.doc.color ?? 0) % LINE_COLORS.length];
-    if (c.kind === "SUPPORT") return this.mat("support", SUPPORT, { metalness: 0.3, roughness: 0.6 });
-    if (c.kind === "VALVE") return this.mat(`valve:${col}`, new THREE.Color(col).multiplyScalar(0.55).getStyle(), { metalness: 0.45, roughness: 0.35 });
-    if (c.kind === "FLANGE" || c.kind === "GASKET") return this.mat(`fl:${col}`, new THREE.Color(col).lerp(new THREE.Color("#c9d2d9"), 0.35).getStyle(), { metalness: 0.55, roughness: 0.3 });
-    return this.mat(`line:${col}`, col);
+    if (finish === "flange") return this.mat(`fl:${col}`, new THREE.Color(col).multiplyScalar(0.82).getStyle(), { metalness: 0.45, roughness: 0.35 });
+    return this.mat(`line:${col}`, col, { metalness: 0.3, roughness: 0.38 });
   }
 
   // ---------------------------------------------------------------- model sync
@@ -208,18 +257,22 @@ export class Viewer {
       const owner = comps[0].owner;
       const list = owner.type === "equipment" ? model.doc.equipment : owner.type === "line" ? model.doc.lines : model.doc.structures;
       const status = this.colorBy === "status" ? ((list as { id: string; meta?: { status: string } }[]).find((o) => o.id === owner.id)?.meta?.status ?? "") : "";
-      const sig = JSON.stringify(comps.map((c) => [c.uid, c.shapes])) + (line ? `|${line.doc.color}` : "") + `|${status}`;
+      const sig = JSON.stringify(comps.map((c) => [c.uid, c.shapes, c.deco?.length ?? 0])) + (line ? `|${line.doc.color}` : "") + `|${status}`;
       const rec = this.owners.get(k);
       if (rec && rec.sig === sig) continue;
       if (rec) this.disposeGroup(rec.group);
       const group = new THREE.Group();
       for (const c of comps) {
-        const mat = this.materialFor(c, model);
+        const byFinish = new Map<string, THREE.BufferGeometry[]>();
+        for (const sh of [...c.shapes, ...(c.deco ?? [])]) {
+          const f = sh.m ?? "";
+          if (!byFinish.has(f)) byFinish.set(f, []);
+          byFinish.get(f)!.push(shapeGeometry(sh));
+        }
         const list: THREE.Mesh[] = [];
-        for (const s of c.shapes) {
-          const m = shapeMesh(s, mat);
-          m.castShadow = true;
-          m.receiveShadow = true;
+        for (const [f, geos] of byFinish) {
+          const mat = this.materialFor(c, f || undefined, model);
+          const m = new THREE.Mesh(mergeAll(geos), mat);
           m.userData.uid = c.uid;
           this.baseMat.set(m, mat);
           group.add(m);
@@ -234,7 +287,7 @@ export class Viewer {
     for (const uid of [...this.meshesByUid.keys()]) if (!this.compsByUid.has(uid)) this.meshesByUid.delete(uid);
     this.drawErrors(model);
     this.buildLabels(model);
-    this.updateGridAndShadow();
+    this.updateGrid();
     this.repaint();
   }
 
@@ -261,6 +314,7 @@ export class Viewer {
       this.errorGroup.add(line);
     }
     this.overlay.add(this.errorGroup);
+    this.touch();
   }
 
   private buildLabels(model: Model) {
@@ -296,41 +350,33 @@ export class Viewer {
   setLabels(on: boolean, model: Model) {
     this.labelsOn = on;
     this.buildLabels(model);
+    this.touch();
   }
 
-  private updateGridAndShadow() {
+  private updateGrid() {
     const box = new THREE.Box3().setFromObject(this.root);
-    for (const o of [...this.grid.children]) o.removeFromParent();
+    for (const o of [...this.grid.children]) {
+      o.removeFromParent();
+      ((o as THREE.LineSegments).geometry as THREE.BufferGeometry | undefined)?.dispose();
+    }
     if (box.isEmpty()) box.set(new THREE.Vector3(-10, -10, 0), new THREE.Vector3(10, 10, 5));
-    const size = Math.ceil((Math.max(box.max.x - box.min.x, box.max.y - box.min.y) + 20) / 10) * 10;
+    const size = Math.ceil((Math.max(box.max.x - box.min.x, box.max.y - box.min.y) + 30) / 10) * 10;
     const cx = Math.round((box.min.x + box.max.x) / 2);
     const cy = Math.round((box.min.y + box.max.y) / 2);
-    const fine = new THREE.GridHelper(size, size, 0x8a99a6, 0x8a99a6);
+    const light = this.background === "light";
+    const fine = new THREE.GridHelper(size, size, light ? 0x8a99a6 : 0x4b6078, light ? 0x8a99a6 : 0x4b6078);
     (fine.material as THREE.Material).transparent = true;
-    (fine.material as THREE.Material).opacity = 0.18;
-    const major = new THREE.GridHelper(size, size / 5, 0x6f8090, 0x6f8090);
+    (fine.material as THREE.Material).opacity = light ? 0.18 : 0.22;
+    const major = new THREE.GridHelper(size, size / 5, light ? 0x6f8090 : 0x6c87a6, light ? 0x6f8090 : 0x6c87a6);
     (major.material as THREE.Material).transparent = true;
-    (major.material as THREE.Material).opacity = 0.35;
+    (major.material as THREE.Material).opacity = light ? 0.35 : 0.4;
     for (const g of [fine, major]) {
       g.rotation.x = Math.PI / 2;
       g.position.set(cx, cy, 0.001);
       this.grid.add(g);
     }
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(size, size), new THREE.ShadowMaterial({ opacity: 0.22 }));
-    ground.position.set(cx, cy, 0);
-    ground.receiveShadow = true;
-    this.grid.add(ground);
-    const r = Math.max(size / 2, 10);
-    const cam = this.sun.shadow.camera;
-    cam.left = -r;
-    cam.right = r;
-    cam.top = r;
-    cam.bottom = -r;
-    cam.near = 1;
-    cam.far = 400;
-    cam.updateProjectionMatrix();
-    this.sun.target.position.set(cx, cy, 0);
-    this.sun.position.set(cx + 40, cy - 60, 90);
+    this.key.target.position.set(cx, cy, 0);
+    this.touch();
   }
 
   // ---------------------------------------------------------------- highlight
@@ -369,6 +415,7 @@ export class Viewer {
       else if (this.showClashes && this.clashUids.has(uid)) mat = this.clashMat;
       for (const m of meshes) m.material = mat ?? this.baseMat.get(m) ?? m.material;
     }
+    this.touch();
   }
 
   // ---------------------------------------------------------------- ghosts and guides
@@ -377,6 +424,7 @@ export class Viewer {
       o.removeFromParent();
       (o as THREE.Mesh).geometry?.dispose();
     }
+    this.touch();
     if (!comps) return;
     for (const c of comps) for (const s of c.shapes) this.ghost.add(shapeMesh(s, ok ? this.ghostMat : this.ghostBadMat));
   }
@@ -399,6 +447,7 @@ export class Viewer {
       this.guideGroup.add(m);
     }
     this.overlay.add(this.guideGroup);
+    this.touch();
   }
 
   // ---------------------------------------------------------------- picking
@@ -474,6 +523,7 @@ export class Viewer {
   }
 
   attachGizmo(at: V3 | null) {
+    this.touch();
     if (!at) {
       this.gizmo.detach();
       return;
@@ -495,7 +545,7 @@ export class Viewer {
     if (box.isEmpty()) return;
     const sphere = box.getBoundingSphere(new THREE.Sphere());
     const r = Math.max(sphere.radius, 1.2);
-    const d = (r / Math.sin((this.camera.fov * Math.PI) / 360)) * (uids?.length ? 1.15 : 0.82);
+    const d = (r / Math.sin((this.camera.fov * Math.PI) / 360)) * (uids?.length ? 1.15 : 0.66);
     const v3 = dir ? new THREE.Vector3(...dir).normalize() : this.camera.position.clone().sub(this.controls.target).normalize();
     this.animateTo(sphere.center, sphere.center.clone().addScaledVector(v3, d));
   }
@@ -534,6 +584,7 @@ export class Viewer {
 
   // ---------------------------------------------------------------- section box
   setSection(box: { lo: V3; hi: V3 } | null) {
+    this.touch();
     if (!box) {
       this.section = null;
       this.renderer.clippingPlanes = [];
@@ -560,7 +611,7 @@ export class Viewer {
 
   /** PNG of the current view (read back right after rendering, so no preserved drawing buffer is needed). */
   snapshot(): Blob {
-    this.renderer.render(this.scene, this.camera);
+    this.draw(this.aoEnabled);
     const url = this.renderer.domElement.toDataURL("image/png");
     const bin = atob(url.split(",")[1]);
     const bytes = new Uint8Array(bin.length);
@@ -573,16 +624,51 @@ export class Viewer {
     const w = Math.max(this.host.clientWidth, 1);
     const h = Math.max(this.host.clientHeight, 1);
     this.renderer.setSize(w, h, false);
+    this.composer.setPixelRatio(this.renderer.getPixelRatio());
+    this.composer.setSize(w, h);
     this.labels.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    this.touch();
+  }
+
+  private draw(withAo: boolean) {
+    const r = this.renderer;
+    if (withAo) this.composer.render();
+    else {
+      r.autoClear = true;
+      r.render(this.scene, this.camera);
+    }
+    // tool overlays on top, without occlusion
+    r.autoClear = false;
+    r.clearDepth();
+    r.render(this.top, this.camera);
+    r.autoClear = true;
   }
 
   private frame() {
     this.controls.update();
-    this.renderer.render(this.scene, this.camera);
-    this.labels.render(this.scene, this.camera);
-    this.cube.sync(this.camera, this.controls.target);
+    // headlight: from just above and left of the eye, towards the orbit centre
+    const off = new THREE.Vector3(-0.35, 0.25, 0).applyQuaternion(this.camera.quaternion).multiplyScalar(this.camera.position.distanceTo(this.controls.target));
+    this.headlight.position.copy(this.camera.position).add(off);
+    this.headlight.target.position.copy(this.controls.target);
+    this.camera.updateMatrixWorld();
+    const moved = !this.lastCam.equals(this.camera.matrixWorld);
+    const now = performance.now();
+    if (moved || this.dirty) {
+      this.lastCam.copy(this.camera.matrixWorld);
+      // still camera and a model change (hover, edit): draw with occlusion right away
+      const settled = !moved && now - this.lastChange > 220;
+      this.draw(this.aoEnabled && settled);
+      this.aoDone = this.aoEnabled && settled;
+      if (moved) this.lastChange = now;
+      this.dirty = false;
+      this.labels.render(this.scene, this.camera);
+      this.cube.sync(this.camera, this.controls.target);
+    } else if (this.aoEnabled && !this.aoDone && now - this.lastChange > 220) {
+      this.draw(true);
+      this.aoDone = true;
+    }
   }
 }
 
@@ -607,7 +693,7 @@ class ViewCube {
     // Material order after the rotation: +X, -X, +Z, -Z, -Y, +Y.
     this.mats = FACE_LABELS.map((t) => new THREE.MeshBasicMaterial({ map: faceTexture(t, false) }));
     this.cube = new THREE.Mesh(new THREE.BoxGeometry(1.7, 1.7, 1.7).rotateX(Math.PI / 2), this.mats);
-    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(this.cube.geometry), new THREE.LineBasicMaterial({ color: 0x4d5d6a }));
+    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(this.cube.geometry), new THREE.LineBasicMaterial({ color: 0x9db4cc }));
     this.cube.add(edges);
     this.scene.add(this.cube);
     this.camera.up.set(0, 0, 1);
@@ -665,10 +751,13 @@ function faceTexture(label: string, hot: boolean): THREE.CanvasTexture {
   const c = document.createElement("canvas");
   c.width = c.height = 128;
   const g = c.getContext("2d")!;
-  g.fillStyle = hot ? "#2f8fe0" : "#e7edf2";
+  const grad = g.createLinearGradient(0, 0, 0, 128);
+  grad.addColorStop(0, hot ? "#3aa0ff" : "#4a6280");
+  grad.addColorStop(1, hot ? "#1c6fd0" : "#2c3d52");
+  g.fillStyle = grad;
   g.fillRect(0, 0, 128, 128);
-  g.fillStyle = hot ? "#ffffff" : "#26323b";
-  g.font = `600 ${label.length > 1 ? 34 : 54}px "Barlow Condensed", "Arial Narrow", sans-serif`;
+  g.fillStyle = "#ffffff";
+  g.font = `600 ${label.length > 1 ? 32 : 52}px "Segoe UI", "Helvetica Neue", Arial, sans-serif`;
   g.textAlign = "center";
   g.textBaseline = "middle";
   g.fillText(label, 64, 68);

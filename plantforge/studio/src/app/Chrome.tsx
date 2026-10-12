@@ -15,9 +15,10 @@ import { HELP, runCommand } from "./cli";
 import { copyText, exportLine } from "./exporters";
 import { cliHooks, hub } from "./hub";
 import { Icon } from "./icons";
+import { useStatus } from "./status";
 import { useStore } from "./store";
 
-// ------------------------------------------------------------------ top bar
+// ------------------------------------------------------------------ title bar
 export function TopBar({ assistantAvailable, projectId, onSave }: { assistantAvailable: boolean; projectId: string | null; onSave: () => void }) {
   const s = useStore();
   const hard = (s.model.clashes ?? []).filter((c) => c.hard).length;
@@ -26,20 +27,31 @@ export function TopBar({ assistantAvailable, projectId, onSave }: { assistantAva
     <header className="topbar">
       <div className="brand">
         <span className="brand-mark" aria-hidden="true">
-          <svg viewBox="0 0 24 24" width="22" height="22">
+          <svg viewBox="0 0 24 24" width="20" height="20">
             <path d="M3 18V9h7V4h11" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
             <circle cx="3" cy="18" r="2.2" fill="currentColor" />
             <circle cx="21" cy="4" r="2.2" fill="currentColor" />
           </svg>
         </span>
         <span className="brand-name">PlantForge</span>
-        <span className="brand-sub">Studio</span>
+        <span className="brand-sub">Design</span>
+      </div>
+      <div className="qat" role="toolbar" aria-label="Quick access">
+        <button type="button" onClick={onSave} title="Save (Ctrl+S)" aria-label="Save">
+          <Icon name="save" size={15} />
+        </button>
+        <button type="button" onClick={s.undo} disabled={!s.history.length} title={s.history.length ? `Undo: ${s.lastLabel} (Ctrl+Z)` : "Nothing to undo"} aria-label="Undo">
+          <Icon name="undo" size={15} />
+        </button>
+        <button type="button" onClick={s.redo} disabled={!s.future.length} title="Redo (Ctrl+Y)" aria-label="Redo">
+          <Icon name="redo" size={15} />
+        </button>
       </div>
       <div className="tb-project">
-        <span className="mono">{s.doc.project.name || "Untitled plant"}</span>
-        <span className="muted">
-          {[s.doc.project.area, s.doc.project.unit].filter(Boolean).join(" · ")}
-          {s.dirty ? " · unsaved changes" : projectId ? " · saved" : ""}
+        <span className="tb-name">{s.doc.project.name || "Untitled plant"}</span>
+        <span className="tb-sub">
+          {[s.doc.project.area, s.doc.project.unit].filter(Boolean).join(" / ")}
+          {s.dirty ? " · modified" : projectId ? " · saved" : ""}
         </span>
       </div>
       <div className="tb-status">
@@ -58,17 +70,14 @@ export function TopBar({ assistantAvailable, projectId, onSave }: { assistantAva
       </div>
       <div className="tb-actions">
         <button type="button" className="btn ghost" onClick={() => s.set({ projectsOpen: true })}>
-          <Icon name="folder" size={16} /> Projects
-        </button>
-        <button type="button" className="btn ghost" onClick={onSave} title="Save to your account">
-          <Icon name="save" size={16} /> Save
+          <Icon name="folder" size={15} /> <span>Projects</span>
         </button>
         <button type="button" className="btn ghost icon-only" onClick={() => s.set({ helpOpen: true })} aria-label="Help">
-          <Icon name="help" size={17} />
+          <Icon name="help" size={16} />
         </button>
         {assistantAvailable && (
           <button type="button" id="open-assistant" className="btn accent" onClick={() => s.set({ assistantOpen: !s.assistantOpen })}>
-            <Icon name="spark" size={16} /> AI Assistant
+            <Icon name="spark" size={15} /> <span>AI Assistant</span>
           </button>
         )}
       </div>
@@ -76,21 +85,32 @@ export function TopBar({ assistantAvailable, projectId, onSave }: { assistantAva
   );
 }
 
-// ------------------------------------------------------------------ command line
+// ------------------------------------------------------------------ command window
 export function CommandBar() {
   const log = useStore((s) => s.log);
   const [v, setV] = useState("");
   const [hist, setHist] = useState<string[]>([]);
   const [hi, setHi] = useState(-1);
-  const [open, setOpen] = useState(false);
-  const last = log[log.length - 1];
+  const [open, setOpen] = useState(true);
+  const logRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [log, open]);
   return (
     <footer className="cmdbar">
+      <div className="cmd-head">
+        <button type="button" className="cmd-toggle" onClick={() => setOpen(!open)} aria-expanded={open} aria-label={open ? "Hide command output" : "Show command output"}>
+          <Icon name="chevron" size={12} className={open ? "rot-down" : "rot-up"} />
+        </button>
+        <span>Command Window</span>
+        <span className="grow" />
+        <span className="cmd-hint">HELP lists the commands</span>
+      </div>
       {open && (
-        <div className="cmd-log" role="log">
-          {log.slice(-60).map((l, i) => (
+        <div className="cmd-log" role="log" ref={logRef}>
+          {log.slice(-80).map((l, i) => (
             <div key={i} className={`cmd-${l.kind}`}>
-              {l.kind === "in" ? "› " : ""}
+              {l.kind === "in" ? "> " : ""}
               {l.text}
             </div>
           ))}
@@ -107,15 +127,12 @@ export function CommandBar() {
           setV("");
         }}
       >
-        <button type="button" className="cmd-toggle" onClick={() => setOpen(!open)} aria-expanded={open} aria-label="Show command history">
-          <Icon name="chevron" size={13} className={open ? "rot-up" : "rot-down"} />
-        </button>
-        <span className="cmd-prompt mono">CMD›</span>
+        <span className="cmd-prompt mono">&gt;</span>
         <input
           id="command-line"
           className="mono"
           value={v}
-          placeholder="Type a command: HELP · CONNECT P-101A/N2 E-101/N1 · E 2000 while routing · NEW PUMP AT E 0 N 0"
+          placeholder="NEW PUMP AT E 0 N 0 · CONNECT P-101A/N2 E-101/N1 · MOVE P-101A E 500 · GOTO C-201 · HELP"
           onChange={(e) => setV(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "ArrowUp" && hist.length) {
@@ -139,9 +156,32 @@ export function CommandBar() {
           autoComplete="off"
           spellCheck={false}
         />
-        {last && !open && <span className={`cmd-last cmd-${last.kind}`}>{last.text}</span>}
       </form>
     </footer>
+  );
+}
+
+// ------------------------------------------------------------------ status bar
+export function StatusBar() {
+  const prompt = useStore((s) => s.prompt);
+  const tool = useStore((s) => s.tool);
+  const model = useStore((s) => s.model);
+  const shared = useStore((s) => s.shared);
+  const user = useStore((s) => s.user);
+  const cursor = useStatus((s) => s.cursor);
+  const view = useStatus((s) => s.view);
+  const hard = (model.clashes ?? []).filter((c) => c.hard).length;
+  return (
+    <div className="statusbar" role="status">
+      <span className="sb-msg">{tool !== "select" && prompt ? prompt : "Ready"}</span>
+      <span className="sb-cell mono" title="Cursor position on the working plane">{cursor || "E — N — U —"}</span>
+      <span className="sb-cell">{view}</span>
+      <span className="sb-cell">mm</span>
+      <span className={`sb-cell ${hard ? "crit-text" : ""}`}>{hard ? `${hard} hard clash${hard > 1 ? "es" : ""}` : "No clashes"}</span>
+      <span className="sb-cell">{model.equipment.size} EQUI · {model.lines.size} PIPE</span>
+      <span className="sb-cell">{shared ? `Shared: ${shared.name} (${shared.status})` : "Local database"}</span>
+      <span className="sb-cell">{user.name}</span>
+    </div>
   );
 }
 

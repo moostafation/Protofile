@@ -51,6 +51,7 @@ const RACK_BONUS = 0.35;
 const HEADROOM_COST = 0.6;
 const OFF_RACK_COST = 0.8; // long horizontal runs belong on a rack
 const OFF_RACK_FREE = 4000; // mm of horizontal run allowed off the rack per leg
+const MIN_BOP = 200; // lowest bottom of pipe above grade
 
 const uniq = (xs: number[]) => [...new Set(xs.map((x) => Math.round(x)))];
 
@@ -173,6 +174,8 @@ export function autoRoute(req: AutoRouteRequest): AutoRouteResult | null {
     const k = path.map((p) => p.map(Math.round).join(",")).join(";");
     if (seen.has(k)) continue;
     seen.add(k);
+    // pipes stay above grade: bottom of pipe at least 200 mm clear of the ground
+    if (path.some((p) => p[2] - od / 2 < MIN_BOP - 1)) continue;
     const d0 = norm(sub(path[1], path[0]));
     if (start.dir && dot(d0, start.dir) < 0.999) continue;
     if (!start.dir && start.avoid && dot(d0, start.avoid) < -0.999) continue;

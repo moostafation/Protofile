@@ -32,6 +32,7 @@ export const HELP = [
   "ROTATE P-101A 90 · DELETE P-101B · REROUTE 4\"-P-1002",
   "NPS 6 · SPEC A1A · EL 3500 (working elevation for new routes)",
   "CLASH [clearance mm] · ISO <line> · GOTO <tag> · UNDO · REDO · HELP",
+  "E3D style: /V-101 (make it the current element) · CE · Q POS · Q ATT · AT E 1000 N 2000 U 0 · BY E 500",
 ];
 
 export interface CliHooks {
@@ -58,17 +59,63 @@ function coords(tokens: string[]): { e?: number; n?: number; z?: number } {
 }
 
 export function runCommand(raw: string, hooks: CliHooks): void {
-  const text = raw.trim();
-  if (!text) return;
+  const typed = raw.trim();
+  if (!typed) return;
   const st = S();
-  st.logLine(text, "in");
+  st.logLine(typed, "in");
+  // E3D-style navigation: "/NAME" makes the element current (CE) and frames it
+  const text = typed.startsWith("/") ? `GOTO ${typed.slice(1)}` : typed;
   const say = (t: string) => st.logLine(t);
   const fail = (t: string) => st.logLine(t, "error");
   if (hooks.routeCommand(text)) return;
   const tokens = text.split(/\s+/);
   const cmd = tokens[0].toUpperCase();
+  const ce = () => {
+    const f = st.focus;
+    if (!f) return null;
+    const list = f.type === "equipment" ? st.doc.equipment : f.type === "line" ? st.doc.lines : st.doc.structures;
+    return { f, obj: (list as { id: string }[]).find((o) => o.id === f.id) as Record<string, any> | undefined };
+  };
+  const TYPE = { equipment: "EQUI", line: "PIPE", structure: "STRU" } as const;
   try {
     switch (cmd) {
+      case "CE": {
+        const c = ce();
+        if (!c?.obj) return fail("No current element: select one, or type /NAME");
+        return say(`${TYPE[c.f.type]} /${c.obj.tag ?? c.obj.number}`);
+      }
+      case "Q": {
+        const c = ce();
+        if (!c?.obj) return fail("No current element: select one, or type /NAME");
+        const what = (tokens[1] ?? "ATT").toUpperCase();
+        const o = c.obj;
+        const name = `/${o.tag ?? o.number}`;
+        if (what === "POS") {
+          if (c.f.type === "equipment") return say(`Position ${fmtENU(o.origin)} WRT /*`);
+          const r = S().model.lines.get(o.id);
+          if (r?.path.length) return say(`Head ${fmtENU(r.path[0])} · Tail ${fmtENU(r.path[r.path.length - 1])}`);
+          return say(`${name} has no position`);
+        }
+        if (what === "NAME") return say(name);
+        if (what === "TYPE") return say(TYPE[c.f.type]);
+        const m = o.meta ?? {};
+        const lines = [`${TYPE[c.f.type]} ${name}`, `  Description ${o.description || o.fluid || "-"}`];
+        if (c.f.type === "equipment") lines.push(`  Position ${fmtENU(o.origin)}`, `  Orientation rotated ${o.rot} deg about U`, `  Template ${o.template}`, `  Nozzles ${o.nozzles.map((n: { name: string; nps: string }) => `${n.name} ${n.nps}"`).join(", ")}`);
+        if (c.f.type === "line") lines.push(`  Pspec /${o.spec}`, `  Bore ${o.nps}"`, `  Head ${o.start.kind === "nozzle" ? "nozzle" : o.start.kind} · Tail ${o.end.kind === "nozzle" ? "nozzle" : o.end.kind}`);
+        lines.push(`  Status ${m.status ?? "Working"} · Rev ${m.rev ?? 1} · Group ${m.group ?? "-"}`);
+        lines.forEach(say);
+        return;
+      }
+      case "AT":
+      case "BY": {
+        const c = ce();
+        if (!c?.obj || c.f.type !== "equipment") return fail(`${cmd} works on equipment: make one current first (/P-101A)`);
+        const k = coords(tokens.slice(1));
+        const o = c.obj.origin as [number, number, number];
+        const to: [number, number, number] = cmd === "AT" ? [k.e ?? o[0], k.n ?? o[1], k.z ?? o[2]] : [o[0] + (k.e ?? 0), o[1] + (k.n ?? 0), o[2] + (k.z ?? 0)];
+        if (!st.apply(moveEquipment(st.doc, c.f.id, to, c.obj.rot), `Move ${c.obj.tag}`)) return;
+        return say(`/${c.obj.tag} at ${fmtENU(to)}`);
+      }
       case "HELP":
       case "?":
         HELP.forEach(say);

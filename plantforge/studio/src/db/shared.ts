@@ -65,6 +65,11 @@ interface Session {
   projectV: number;
   catalogV: number;
   inflight: Map<string, number>;
+  /** Versions this session's queued edits will write, per object, while they are pending. */
+  expected: Map<string, number>;
+  pending: Map<string, number>;
+  projectExpected: number | null;
+  projectPending: number;
   queue: Promise<void>;
   generation: number;
   unsubs: (() => void)[];
@@ -223,6 +228,10 @@ export async function joinShared(pid: string) {
       projectV: pb?.v ?? 0,
       catalogV: cb?.v ?? 0,
       inflight: new Map(),
+      expected: new Map(),
+      pending: new Map(),
+      projectExpected: null,
+      projectPending: 0,
       queue: Promise.resolve(),
       generation: 0,
       unsubs: [],
@@ -349,16 +358,59 @@ export function installSharedSync() {
   commits.add((next, label, kind, prev) => {
     const s = session;
     if (!s || kind === "load" || kind === "remote") return;
-    const gen = s.generation;
-    s.queue = s.queue.then(() => push(s, gen, label, prev, next)).catch((e) => failed(s, label, e));
+    const { upserts, deletes } = changedIds(prev, next);
+    const projChanged = projectKey(prev) !== projectKey(next);
+    if (!upserts.length && !deletes.length && !projChanged) return;
+    // The versions this edit was made on: the shared version, or the one this session's own queued edits
+    // will write. A change from someone else in between makes the save fail instead of overwriting it.
+    const base = new Map<string, number>();
+    for (const oid of [...upserts, ...deletes]) {
+      const b = s.expected.get(oid) ?? s.objs.get(oid)?.v ?? 0;
+      base.set(oid, b);
+      s.expected.set(oid, deletes.includes(oid) ? 0 : b + 1);
+      s.pending.set(oid, (s.pending.get(oid) ?? 0) + 1);
+    }
+    const projBase = s.projectExpected ?? s.projectV;
+    if (projChanged) {
+      s.projectExpected = projBase + 1;
+      s.projectPending += 1;
+    }
+    const tx: Tx = { label, next, upserts, deletes, projChanged, base, projBase, gen: s.generation };
+    s.queue = s.queue.then(() => push(s, tx)).then(() => settle(s, tx), (e) => failed(s, label, e));
   });
 }
 
-async function push(s: Session, gen: number, label: string, prev: PlantDoc, next: PlantDoc) {
-  if (session !== s || gen !== s.generation) return; // dropped after an earlier failure
-  const { upserts, deletes } = changedIds(prev, next);
-  const projChanged = projectKey(prev) !== projectKey(next);
-  if (!upserts.length && !deletes.length && !projChanged) return;
+interface Tx {
+  label: string;
+  next: PlantDoc;
+  upserts: string[];
+  deletes: string[];
+  projChanged: boolean;
+  base: Map<string, number>;
+  projBase: number;
+  gen: number;
+}
+
+/** A transaction left the queue: forget its expected versions once nothing else is pending on them. */
+function settle(s: Session, tx: Tx) {
+  if (tx.gen !== s.generation) return;
+  for (const oid of [...tx.upserts, ...tx.deletes]) {
+    const n = (s.pending.get(oid) ?? 1) - 1;
+    if (n > 0) s.pending.set(oid, n);
+    else {
+      s.pending.delete(oid);
+      s.expected.delete(oid);
+    }
+  }
+  if (tx.projChanged && --s.projectPending <= 0) {
+    s.projectPending = 0;
+    s.projectExpected = null;
+  }
+}
+
+async function push(s: Session, tx: Tx) {
+  if (session !== s || tx.gen !== s.generation) return; // dropped after an earlier failure
+  const { label, next, upserts, deletes, projChanged, base } = tx;
   setStatus("saving");
   const ids = [...upserts, ...deletes];
   const refs = ids.map((oid) => s.db.doc(objPath(s.pid, oid)));
@@ -374,15 +426,15 @@ async function push(s: Session, gen: number, label: string, prev: PlantDoc, next
   const busy = leases.map((l, i) => (l.acquired ? null : i < ids.length ? nameOf(ids[i]) : "the plant settings")).filter(Boolean);
   if (busy.length) throw new Conflict(`${busy.join(", ")} ${busy.length > 1 ? "are" : "is"} being saved by someone else right now`);
 
-  // 2. nobody changed them since this session last saw them
+  // 2. nobody changed them since the version this edit was made on
   const snaps = await Promise.all(all.map((r: AnyCap) => retry(() => r.get())));
   const stale: string[] = [];
   let staleBy = "";
   snaps.forEach((snap: AnyCap, i: number) => {
     const x = snap.exists ? snap.data() : null;
     const remoteV = x && typeof x.v === "number" ? x.v : 0;
-    const knownV = i < ids.length ? (s.objs.get(ids[i])?.v ?? 0) : s.projectV;
-    if (remoteV !== knownV) {
+    const baseV = i < ids.length ? (base.get(ids[i]) ?? 0) : tx.projBase;
+    if (remoteV !== baseV) {
       stale.push(i < ids.length ? nameOf(ids[i]) : "the plant settings");
       staleBy = x?.by ?? staleBy;
       if (i < ids.length && x?.data) s.objs.set(ids[i], { v: remoteV, type: x.type, data: x.data });
@@ -398,8 +450,8 @@ async function push(s: Session, gen: number, label: string, prev: PlantDoc, next
   await Promise.all(
     upserts.map(async (oid, i) => {
       const o = byId.get(oid)!;
-      const v = (s.objs.get(oid)?.v ?? 0) + 1;
-      touched.push({ oid, name: objName(o.obj), op: s.objs.has(oid) ? "modified" : "created" });
+      const v = (base.get(oid) ?? 0) + 1;
+      touched.push({ oid, name: objName(o.obj), op: base.get(oid) ? "modified" : "created" });
       s.inflight.set(oid, v);
       await retry(() => refs[i].set({ type: o.type, v, data: o.obj, at: now, by: s.me, act: label }));
       s.objs.set(oid, { v, type: o.type, data: o.obj });
@@ -413,7 +465,7 @@ async function push(s: Session, gen: number, label: string, prev: PlantDoc, next
     }),
   );
   if (projChanged) {
-    const v = s.projectV + 1;
+    const v = tx.projBase + 1;
     await retry(() => projRef.set({ v, project: next.project, hierarchy: next.hierarchy ?? [], groups: next.groups ?? [], seq: next.seq, by: s.me, act: label }));
     s.projectV = v;
   }
@@ -422,7 +474,7 @@ async function push(s: Session, gen: number, label: string, prev: PlantDoc, next
   // the plant's summary row: one write at a time, after this transaction's own writes
   const summary = { updatedAt: now, objects: s.objs.size, area: next.project.area, unit: next.project.unit };
   s.log.queue = s.log.queue.then(() => s.db.doc(`plants/${s.pid}`).update(summary)).catch(() => undefined);
-  if (session === s && gen === s.generation) setStatus("live");
+  if (session === s && tx.gen === s.generation) setStatus("live");
 }
 
 /** A transaction that could not be saved: drop it (and anything queued after it) and show the shared truth. */
@@ -430,6 +482,10 @@ function failed(s: Session, label: string, e: unknown) {
   if (session !== s) return;
   s.generation += 1;
   s.inflight.clear();
+  s.expected.clear();
+  s.pending.clear();
+  s.projectExpected = null;
+  s.projectPending = 0;
   const code = (e as { code?: string }).code;
   const doc = S().doc;
   const truth = buildDoc(s.objs, { project: doc.project, hierarchy: doc.hierarchy ?? [], groups: doc.groups ?? [], seq: doc.seq });

@@ -2,8 +2,9 @@
 
 import type { StructureDoc } from "./doc";
 import { Comp } from "./model";
-import { Shape, boxMinMax } from "./shapes";
-import { V3, add } from "./vec";
+import { plinth } from "./deco";
+import { Basis, Shape, cyl, obox } from "./shapes";
+import { V3, add, cross, dist, lerp, norm, sub } from "./vec";
 
 export const COLUMN = 300; // HEA 300-ish, as a box
 export const BEAM = 300; // beam depth
@@ -29,13 +30,17 @@ export function rackInfo(s: StructureDoc): RackInfo {
   return { id: s.id, axis, across, start: s.origin, length: s.length, width: s.width, levels: [...s.levels].sort((a, b) => a - b), frames };
 }
 
-/** Box between two points given in rack coordinates (u along, v across, z up). */
-function member(info: RackInfo, u0: number, u1: number, v0: number, v1: number, z0: number, z1: number): Shape {
-  const p = (u: number, v: number, z: number): V3 =>
-    add(info.start, [info.axis[0] * u + info.across[0] * v, info.axis[1] * u + info.across[1] * v, z]);
-  const a = p(u0, v0, z0);
-  const b = p(u1, v1, z1);
-  return boxMinMax([Math.min(a[0], b[0]), Math.min(a[1], b[1]), a[2]], [Math.max(a[0], b[0]), Math.max(a[1], b[1]), b[2]]);
+/** A point given in rack coordinates (u along, v across, z up). */
+const at = (info: RackInfo, u: number, v: number, z: number): V3 => add(info.start, [info.axis[0] * u + info.across[0] * v, info.axis[1] * u + info.across[1] * v, z]);
+
+/**
+ * An I-section member between two centre-line points: `web` is the direction of the section depth.
+ * For clash it is the enclosing box; the viewer draws the I profile.
+ */
+function iMember(a: V3, b: V3, web: V3, depth: number, flange: number): Shape {
+  const along = norm(sub(b, a));
+  const ax: Basis = [norm(cross(web, along)), web, along];
+  return { ...obox(lerp(a, b, 0.5), ax, [flange, depth, dist(a, b)]), m: "ibeam" };
 }
 
 export function buildRack(s: StructureDoc): Comp {
@@ -44,13 +49,38 @@ export function buildRack(s: StructureDoc): Comp {
   const w = info.width / 2;
   const c = COLUMN / 2;
   const shapes: Shape[] = [];
+  const deco: Shape[] = [];
+  const Z: V3 = [0, 0, 1];
   for (const u of info.frames) {
-    for (const v of [-w, w]) shapes.push(member(info, u - c, u + c, v - c, v + c, 0, top));
-    for (const lv of info.levels) shapes.push(member(info, u - c * 0.8, u + c * 0.8, -w + c, w - c, lv - BEAM, lv));
+    // columns: web in the frame plane; transverse beams at every level
+    for (const v of [-w, w]) shapes.push(iMember(at(info, u, v, 0), at(info, u, v, top), info.across, COLUMN, COLUMN));
+    for (const lv of info.levels) shapes.push(iMember(at(info, u, -w + c, lv - BEAM / 2), at(info, u, w - c, lv - BEAM / 2), Z, BEAM, BEAM * 0.8));
+    for (const v of [-w, w]) {
+      deco.push({ ...obox(at(info, u, v, 215), [info.axis, info.across, Z], [480, 480, 30]), m: "steel" });
+      const g = at(info, u, v, 0);
+      deco.push(plinth([g[0] - 400, g[1] - 400, 0], [g[0] + 400, g[1] + 400, 0], 200, 700));
+    }
+    // knee braces under the lowest beam
+    const low = info.levels[0] - BEAM;
+    for (const s of [-1, 1]) deco.push({ ...cyl(at(info, u, s * (w - c), low - 900), at(info, u, s * (w - c - 900), low), 45), m: "steel" });
   }
   for (let i = 0; i + 1 < info.frames.length; i++) {
+    const u0 = info.frames[i] + c;
+    const u1 = info.frames[i + 1] - c;
     for (const v of [-w, w]) {
-      for (const lv of info.levels) shapes.push(member(info, info.frames[i] + c, info.frames[i + 1] - c, v - c * 0.7, v + c * 0.7, lv - BEAM - 150, lv - 150));
+      for (const lv of info.levels) shapes.push(iMember(at(info, u0, v, lv - BEAM / 2 - 150), at(info, u1, v, lv - BEAM / 2 - 150), Z, BEAM * 0.7, BEAM * 0.7 * 0.6));
+    }
+  }
+  // vertical bracing in the end bays and every fourth bay
+  for (let i = 0; i + 1 < info.frames.length; i++) {
+    if (!(i === 0 || i === info.frames.length - 2 || i % 4 === 2)) continue;
+    const u0 = info.frames[i];
+    const u1 = info.frames[i + 1];
+    for (const v of [-w, w]) {
+      const lo = 250;
+      const hi = info.levels[0] - BEAM - 150;
+      deco.push({ ...cyl(at(info, u0 + c, v, lo), at(info, u1 - c, v, hi), 55), m: "steel" });
+      deco.push({ ...cyl(at(info, u1 - c, v, lo), at(info, u0 + c, v, hi), 55), m: "steel" });
     }
   }
   return {
@@ -60,6 +90,7 @@ export function buildRack(s: StructureDoc): Comp {
     nps: "",
     ports: [],
     shapes,
+    deco,
     desc: s.description || `Pipe rack ${info.frames.length} frames, ${info.width} wide, levels ${info.levels.map((l) => `EL +${l}`).join(", ")}`,
     skey: "",
     props: { rack: info },

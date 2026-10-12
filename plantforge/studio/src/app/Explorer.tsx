@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { LINE_COLORS } from "../viewer/Viewer";
 import { hub } from "./hub";
 import { Icon } from "./icons";
@@ -14,6 +14,7 @@ export function Explorer() {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [view, setView] = useState<"system" | "type">("system");
+  const focusRef = useRef<HTMLDivElement>(null);
   const needle = q.trim().toUpperCase();
   const match = (t: string) => !needle || t.toUpperCase().includes(needle);
   const toggle = (k: string) => setOpen((o) => ({ ...o, [k]: !o[k] }));
@@ -32,20 +33,20 @@ export function Explorer() {
     <aside className="pane explorer" aria-label="Model explorer">
       <div className="pane-head">
         <div className="pane-head-row">
-          <h2>Model</h2>
+          <h2>Model Explorer</h2>
           <div className="seg-tabs" role="tablist" aria-label="Explorer view">
             <button type="button" role="tab" id="ex-system" aria-selected={view === "system"} onClick={() => setView("system")}>
-              System
+              Model
             </button>
             <button type="button" role="tab" id="ex-type" aria-selected={view === "type"} onClick={() => setView("type")}>
-              Type
+              Lists
             </button>
           </div>
         </div>
-        <input id="explorer-search" className="search" type="search" placeholder="Find tag or line" value={q} onChange={(e) => setQ(e.target.value)} />
+        <input id="explorer-search" className="search" type="search" placeholder="Find element (name)" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
       {view === "system" ? (
-        <SystemTree match={match} pick={pick} />
+        <ModelTree match={match} pick={pick} rowRef={focusRef} />
       ) : (
       <div className="pane-scroll">
         <div className="tree-root">
@@ -156,19 +157,62 @@ function TreeSection({ title, count, children }: { title: string; count: number;
   );
 }
 
-// ------------------------------------------------------------------ system hierarchy (Area > Unit > System > objects)
+// ------------------------------------------------------------------ model hierarchy, E3D style
+// WORLD > SITE (area) > ZONE (unit) > SYST (system) > EQUI / PIPE / STRU > NOZZ / BRAN > components
 const STATUS_DOT: Record<string, string> = { Working: "st-working", "In Review": "st-review", Approved: "st-approved", Rejected: "st-rejected" };
+const E3D_TYPE: Record<string, string> = { ELBOW: "ELBO", TEE: "TEE", FLANGE: "FLAN", GASKET: "GASK", VALVE: "VALV", SUPPORT: "ATTA", PIPE: "TUBE" };
+const E3D_NAME: Record<string, string> = { ELBO: "ELBOW", TEE: "TEE", FLAN: "FLANGE", GASK: "GASKET", VALV: "VALVE", ATTA: "ATTACHMENT" };
 
-function SystemTree({ match, pick }: { match: (t: string) => boolean; pick: (uids: string[], f: { type: "equipment" | "line" | "structure"; id: string }, fit?: boolean) => void }) {
+type Pick = (uids: string[], f: { type: "equipment" | "line" | "structure"; id: string }, fit?: boolean) => void;
+
+function Row({ depth, open, onToggle, icon, code, name, meta, on, onClick, onDoubleClick, children, extra }: {
+  depth: number;
+  open?: boolean;
+  onToggle?: () => void;
+  icon: string;
+  code: string;
+  name: string;
+  meta?: React.ReactNode;
+  on?: boolean;
+  onClick?: () => void;
+  onDoubleClick?: () => void;
+  children?: React.ReactNode;
+  extra?: React.ReactNode;
+}) {
+  return (
+    <li>
+      <div className={`mx-row${on ? " on" : ""}`} style={{ paddingLeft: 4 + depth * 14 }}>
+        {onToggle ? (
+          <button type="button" className="twisty" aria-expanded={!!open} onClick={onToggle} aria-label={open ? "Collapse" : "Expand"}>
+            <Icon name="chevron" size={11} />
+          </button>
+        ) : (
+          <span className="twisty" />
+        )}
+        <button type="button" className="mx-item" onClick={onClick} onDoubleClick={onDoubleClick} title={`${code} ${name}`}>
+          <Icon name={icon} size={14} className={`mx-ic mx-${code.toLowerCase()}`} />
+          <span className="mx-name">{name}</span>
+          {meta}
+        </button>
+        {extra}
+      </div>
+      {open && children && <ul className="tree">{children}</ul>}
+    </li>
+  );
+}
+
+function ModelTree({ match, pick, rowRef }: { match: (t: string) => boolean; pick: Pick; rowRef: React.RefObject<HTMLDivElement> }) {
   const s = useStore();
   const [adding, setAdding] = useState<string | null>(null);
   const [name, setName] = useState("");
-  const [closed, setClosed] = useState<Record<string, boolean>>({});
+  const [open, setOpen] = useState<Record<string, boolean>>({ world: true });
   const nodes = s.doc.hierarchy ?? [];
   const objs = objects(s.doc);
+  const sel = new Set(s.selection);
   const focus = s.focus;
+  const isOpen = (k: string, dflt = false) => open[k] ?? dflt;
+  const toggle = (k: string, dflt = false) => setOpen((o) => ({ ...o, [k]: !(o[k] ?? dflt) }));
   const uidsOf = (type: string, id: string) => s.model.comps.filter((c) => c.owner.type === type && c.owner.id === id).map((c) => c.uid);
-  const iconOf = (type: string, o: (typeof objs)[number]["obj"]) => (type === "equipment" ? (o as { template: string }).template : type === "line" ? "route" : "rack");
   const addSystem = (parent: string) => {
     const n = name.trim();
     if (!n) return setAdding(null);
@@ -177,65 +221,90 @@ function SystemTree({ match, pick }: { match: (t: string) => boolean; pick: (uid
     setAdding(null);
     setName("");
   };
+  const dot = (status?: string) => <span className={`st-dot ${STATUS_DOT[status ?? "Working"]}`} title={status ?? "Working"} />;
+
+  const element = (type: "equipment" | "line" | "structure", obj: (typeof objs)[number]["obj"], depth: number) => {
+    const k = `o:${obj.id}`;
+    const on = focus?.id === obj.id;
+    const status = obj.meta?.status;
+    if (type === "equipment") {
+      const e = s.model.equipment.get(obj.id);
+      const tpl = (obj as { template: string }).template;
+      return (
+        <Row key={k} depth={depth} open={isOpen(k)} onToggle={() => toggle(k)} icon={tpl} code="EQUI" name={`/${objName(obj)}`} meta={dot(status)} on={on}
+          onClick={() => pick([`${obj.id}/BODY`], { type, id: obj.id })} onDoubleClick={() => pick(uidsOf(type, obj.id), { type, id: obj.id }, true)}>
+          {e?.nozzles.map((n) => (
+            <Row key={n.uid} depth={depth + 1} icon="nozzle" code="NOZZ" name={`${n.props.name}`} meta={<span className="mx-meta">{n.nps}" {n.props.service}</span>} on={sel.has(n.uid)} onClick={() => pick([n.uid], { type, id: obj.id })} />
+          ))}
+        </Row>
+      );
+    }
+    if (type === "line") {
+      const l = s.model.lines.get(obj.id);
+      const bk = `b:${obj.id}`;
+      const counters: Record<string, number> = {};
+      const comps = (l?.comps ?? []).filter((c) => c.kind !== "PIPE");
+      const color = LINE_COLORS[((obj as { color: number }).color ?? 0) % LINE_COLORS.length];
+      return (
+        <Row key={k} depth={depth} open={isOpen(k)} onToggle={() => toggle(k)} icon="route" code="PIPE" name={`/${objName(obj)}`}
+          meta={<>{l?.error ? <span className="chip crit">error</span> : <span className="swatch" style={{ background: color }} />}{dot(status)}</>}
+          on={on} onClick={() => pick(uidsOf(type, obj.id), { type, id: obj.id })} onDoubleClick={() => pick(uidsOf(type, obj.id), { type, id: obj.id }, true)}>
+          <Row key={bk} depth={depth + 1} open={isOpen(bk, true)} onToggle={() => toggle(bk, true)} icon="lines" code="BRAN" name={`/${objName(obj)}/B1`} meta={<span className="mx-meta">{l?.doc.nps}" {comps.length} comps</span>}
+            onClick={() => pick(uidsOf(type, obj.id), { type, id: obj.id })}>
+            {comps.map((c) => {
+              const code = E3D_TYPE[c.kind] ?? c.kind;
+              counters[code] = (counters[code] ?? 0) + 1;
+              const detail = c.kind === "VALVE" ? ` ${c.props.valveType}` : c.kind === "ELBOW" ? ` ${Math.round(c.props.angle)}°` : "";
+              return (
+                <Row key={c.uid} depth={depth + 2} icon={c.kind === "VALVE" ? (c.props.valveType as string) : ({ TEE: "tee", SUPPORT: "shoe", ELBOW: "elbow", FLANGE: "flange", GASKET: "gasket" } as Record<string, string>)[c.kind] ?? "pipe"} code={code} name={`${E3D_NAME[code] ?? code} ${counters[code]}`}
+                  meta={<span className="mx-meta">{c.nps}"{detail}</span>} on={sel.has(c.uid)} onClick={() => pick([c.uid], { type, id: obj.id })} onDoubleClick={() => pick([c.uid], { type, id: obj.id }, true)} />
+              );
+            })}
+          </Row>
+        </Row>
+      );
+    }
+    return (
+      <Row key={k} depth={depth} icon="rack" code="STRU" name={`/${objName(obj)}`} meta={dot(status)} on={on}
+        onClick={() => pick(uidsOf(type, obj.id), { type, id: obj.id })} onDoubleClick={() => pick(uidsOf(type, obj.id), { type, id: obj.id }, true)} />
+    );
+  };
+
+  const CODE = { area: "SITE", unit: "ZONE", system: "SYST" } as const;
   const render = (parent: string | null, depth: number): React.ReactNode =>
     nodes
       .filter((h) => h.parent === parent)
       .map((h) => {
         const members = objs.filter((o) => o.obj.meta?.system === h.id && match(objName(o.obj)));
-        const isClosed = !!closed[h.id];
+        const k = `h:${h.id}`;
         return (
-          <li key={h.id}>
-            <div className="sys-row" style={{ paddingLeft: 8 + depth * 14 }}>
-              <button type="button" className="twisty" aria-expanded={!isClosed} onClick={() => setClosed((c) => ({ ...c, [h.id]: !c[h.id] }))}>
-                <Icon name="chevron" size={12} />
+          <Row key={k} depth={depth} open={isOpen(k, true)} onToggle={() => toggle(k, true)} icon={h.kind === "system" ? "folder" : h.kind === "unit" ? "iso" : "plan"} code={CODE[h.kind]}
+            name={h.kind === "system" ? h.name : `/${h.name}`} meta={h.kind === "system" ? <span className="count">{members.length}</span> : undefined}
+            extra={h.kind === "unit" ? (
+              <button type="button" className="icon-btn small" aria-label="Add a system" title="Add a system" onClick={() => setAdding(h.id)}>
+                <Icon name="plus" size={13} />
               </button>
-              <Icon name={h.kind === "system" ? "folder" : h.kind === "unit" ? "iso" : "plan"} size={14} />
-              <span className={`sys-name ${h.kind}`}>{h.name}</span>
-              {h.kind === "system" && <span className="count">{members.length}</span>}
-              {h.kind === "unit" && (
-                <button type="button" className="icon-btn small" aria-label="Add a system" title="Add a system" onClick={() => setAdding(h.id)}>
-                  <Icon name="plus" size={13} />
+            ) : undefined}>
+            {adding === h.id && (
+              <li style={{ paddingLeft: 30 + depth * 14 }} className="sys-add">
+                <input id="new-system" autoFocus placeholder="System name, e.g. Steam" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => (e.key === "Enter" ? addSystem(h.id) : e.key === "Escape" && setAdding(null))} />
+                <button type="button" className="btn small" onClick={() => addSystem(h.id)}>
+                  Add
                 </button>
-              )}
-            </div>
-            {!isClosed && (
-              <ul className="tree">
-                {adding === h.id && (
-                  <li style={{ paddingLeft: 30 + depth * 14 }} className="sys-add">
-                    <input id="new-system" autoFocus placeholder="System name, e.g. Steam" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => (e.key === "Enter" ? addSystem(h.id) : e.key === "Escape" && setAdding(null))} />
-                    <button type="button" className="btn small" onClick={() => addSystem(h.id)}>
-                      Add
-                    </button>
-                  </li>
-                )}
-                {render(h.id, depth + 1)}
-                {members.map(({ type, obj }) => (
-                  <li key={obj.id}>
-                    <button
-                      type="button"
-                      className={`tree-item sys-obj${focus?.id === obj.id ? " on" : ""}`}
-                      style={{ paddingLeft: 30 + depth * 14 }}
-                      onClick={() => pick(type === "equipment" ? [`${obj.id}/BODY`] : uidsOf(type, obj.id), { type, id: obj.id })}
-                      onDoubleClick={() => pick(uidsOf(type, obj.id), { type, id: obj.id }, true)}
-                    >
-                      <Icon name={iconOf(type, obj)} size={14} />
-                      <span className="mono">{objName(obj)}</span>
-                      <span className={`st-dot ${STATUS_DOT[obj.meta?.status ?? "Working"]}`} title={obj.meta?.status} />
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              </li>
             )}
-          </li>
+            {render(h.id, depth + 1)}
+            {members.map(({ type, obj }) => element(type, obj, depth + 1))}
+          </Row>
         );
       });
   return (
-    <div className="pane-scroll">
-      <div className="tree-root">
-        <span className="eyebrow">Plant</span>
-        <span className="tree-root-name">{s.doc.project.plant || s.doc.project.name}</span>
-      </div>
-      <ul className="tree sys-tree">{render(null, 0)}</ul>
+    <div className="pane-scroll mx" ref={rowRef}>
+      <ul className="tree mx-tree">
+        <Row depth={0} open={isOpen("world", true)} onToggle={() => toggle("world", true)} icon="iso" code="WORLD" name="*" meta={<span className="mx-meta">{s.doc.project.plant || s.doc.project.name}</span>}>
+          {render(null, 1)}
+        </Row>
+      </ul>
     </div>
   );
 }

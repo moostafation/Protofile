@@ -37,7 +37,7 @@ describe("plant database", () => {
     expect(lines.rows.length).toBe(demo.lines.length);
     expect(lines.rows.every((r) => r[1] === "OK")).toBe(true);
     const free = db.query("SELECT nozzle FROM v_nozzle_schedule WHERE connected_line = 'free'");
-    expect(free.rows.map((r) => r[0])).toEqual(["T-101/N1"]);
+    expect(free.rows.map((r) => r[0])).toEqual([]); // every nozzle of the demo is piped
     const welds = db.query("SELECT SUM(welds) FROM v_weld_summary").rows[0][0];
     expect(welds).toBe(computeModel(demo).conn.welds.length);
   });

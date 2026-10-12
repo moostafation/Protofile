@@ -6,7 +6,7 @@ import { installSharedSync, joinShared } from "../db/shared";
 import { cloud, currentUser, loadDraft, sampleFn } from "../platform/claude";
 import { DatabaseManager } from "./DatabaseManager";
 import { Assistant } from "./Assistant";
-import { CommandBar, Help, IsoView, Projects, Toasts, TopBar } from "./Chrome";
+import { CommandBar, Help, IsoView, Projects, StatusBar, Toasts, TopBar } from "./Chrome";
 import { Explorer } from "./Explorer";
 import { hub } from "./hub";
 import { Ribbon } from "./Ribbon";
@@ -46,7 +46,7 @@ export function App() {
         joinShared(sharedPid).catch((e) => st.toast(`Working on a local copy: ${(e as Error).message}`, "info"));
       }
       setProjectIdState(dbHub.projectId);
-      st.logLine("PlantForge Studio ready. Type HELP for commands.");
+      st.logLine("PlantForge Design ready. Type HELP for commands, or /NAME to make an element current.");
       setReady(true);
       sampleFn().then((s) => setAssistant(!!s));
     })().catch((e) => {
@@ -127,6 +127,7 @@ export function App() {
         {assistantOpen && <Assistant />}
       </div>
       <CommandBar />
+      <StatusBar />
       {isoLine && <IsoView />}
       {projectsOpen && <Projects projectId={projectId} setProjectId={setProjectId} onSave={save} />}
       {helpOpen && <Help />}

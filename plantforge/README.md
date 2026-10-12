@@ -1,6 +1,7 @@
 # PlantForge
 
 > **جديد: [PlantForge Studio](studio/README.md)** - البرنامج التفاعلي ثلاثي الأبعاد: رسم المواسير بالماوس، و Auto-routing، و Clash لحظي، وأيزومتريك، ومساعد ذكاء اصطناعي.
+> وشكله بقى **Desktop زي E3D**: 3D View غامق، وحديد I-beam، ومسامير الفلانشات، و Platforms، و Model Explorer بشجرة SITE / ZONE / PIPE / BRAN.
 > ودلوقتي ليه **قاعدة بيانات SQLite زي SP3D**: Catalog و Specs بتتعدل وتتعمل لها Bulkload، و Approval workflow، و Transactions، وتقارير SQL، و Shared plant لكذا مهندس في نفس الوقت.
 > افتح `studio/release/plantforge-studio.html` في المتصفح.
 

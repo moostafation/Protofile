@@ -111,7 +111,7 @@ export const useStore = create<State & Actions>((set, get) => ({
   newLine: { nps: "4", spec: "A1A", fluid: "Process", service: "P" },
   prompt: "",
   showClashes: true,
-  labels: true,
+  labels: false,
   clearance: 0,
   workingZ: 0,
   section: null,

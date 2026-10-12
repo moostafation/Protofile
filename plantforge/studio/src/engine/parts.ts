@@ -2,7 +2,8 @@
 
 import { catalog } from "./catalog";
 import { Comp, port } from "./model";
-import { Shape, cyl, ell, fru, obox } from "./shapes";
+import { boltRing } from "./deco";
+import { Shape, cyl, ell, finish, fru, obox } from "./shapes";
 import { PipingSpec, specApi } from "./spec";
 import { V3, addScaled, anyPerp, cross, dist, dot, lerp, norm, sub } from "./vec";
 
@@ -92,7 +93,8 @@ export function makeFlange(spec: PipingSpec, nps: string, b: Base, weld: V3, fac
     kind: "FLANGE",
     nps,
     ports: [port("WELD", weld, [-u[0], -u[1], -u[2]], "BW", nps), port("FACE", face, u, "FL", nps)],
-    shapes: [fru(weld, back, od / 2, fl.hubDia / 2), cyl(back, rfStart, fl.o / 2), cyl(rfStart, face, fl.rfDia / 2)],
+    shapes: finish("flange", fru(weld, back, od / 2, fl.hubDia / 2), cyl(back, rfStart, fl.o / 2), cyl(rfStart, face, fl.rfDia / 2)),
+    deco: flangeBolts(fl, back, u),
     desc: `${specApi.part(spec, "flange").description}, SCH ${specApi.schedule(spec, nps)} BORE`,
     skey: specApi.part(spec, "flange").skey,
     props: { rating: spec.rating, length: fl.length, bolts: fl.bolts, boltDia: fl.boltDia },
@@ -108,7 +110,7 @@ export function makeGasket(spec: PipingSpec, nps: string, b: Base, a: V3, z: V3)
     kind: "GASKET",
     nps,
     ports: [port("P1", a, [-u[0], -u[1], -u[2]], "FL", nps), port("P2", z, u, "FL", nps)],
-    shapes: [cyl(a, z, (fl.bc - fl.boltDiaMm) / 2)],
+    shapes: finish("gasket", cyl(a, z, (fl.bc - fl.boltDiaMm) / 2)),
     desc: specApi.part(spec, "gasket").description,
     props: { thickness: dist(a, z), rating: spec.rating, bolts: fl.bolts, boltDia: fl.boltDia },
     skey: "",
@@ -141,22 +143,24 @@ export function makeValve(spec: PipingSpec, nps: string, b: Base, type: string, 
     // yoke + stem + handwheel
     const yokeTop = addScaled(bonnetTop, stem, o * 0.65);
     shapes.push(obox(lerp(bonnetTop, yokeTop, 0.5), [side, u, stem], [bodyR * 0.9, o * 0.08, o * 0.65]));
-    shapes.push(cyl(bonnetTop, addScaled(yokeTop, stem, o * 0.35), o * 0.035));
+    shapes.push({ ...cyl(bonnetTop, addScaled(yokeTop, stem, o * 0.35), o * 0.035), m: "bolt" });
     const wheelR = Math.max(o * 0.55, 90);
     const hub = addScaled(yokeTop, stem, o * 0.08);
-    shapes.push({ t: "tor", c: hub, s: addScaled(hub, anyPerp(stem), wheelR), n: stem, ang: Math.PI * 2, r: Math.max(o * 0.035, 8) });
+    shapes.push({ t: "tor", c: hub, s: addScaled(hub, anyPerp(stem), wheelR), n: stem, ang: Math.PI * 2, r: Math.max(o * 0.035, 8), m: "wheel" });
     for (const k of [0, 1]) {
       const spoke = k ? side : u;
-      shapes.push(cyl(addScaled(hub, spoke, -wheelR), addScaled(hub, spoke, wheelR), Math.max(o * 0.018, 5)));
+      shapes.push({ ...cyl(addScaled(hub, spoke, -wheelR), addScaled(hub, spoke, wheelR), Math.max(o * 0.018, 5)), m: "wheel" });
     }
   }
+  const painted = shapes.map((s): Shape => (s.m ? s : { ...s, m: "valve" }));
   return {
     ...b,
     uid: `${b.owner.id}/${b.tag}`,
     kind: "VALVE",
     nps,
     ports: [port("P1", a, [-u[0], -u[1], -u[2]], "FL", nps), port("P2", z, u, "FL", nps)],
-    shapes,
+    shapes: painted,
+    deco: [...flangeBolts(fl, addScaled(a, u, t), [-u[0], -u[1], -u[2]], t), ...flangeBolts(fl, addScaled(z, u, -t), u, t)],
     desc: rule.description,
     skey: rule.skey,
     props: { valveType: type, faceToFace: length, rating: spec.rating, stem, center: c },
@@ -177,10 +181,16 @@ export function makeShoe(nps: string, b: Base, at: V3, along: V3, height: number
     kind: "SUPPORT",
     nps,
     ports: [],
-    shapes: [web, base],
+    shapes: finish("support", web, base),
     desc,
     skey: "",
     props: { height, at, bottom },
   };
 }
 
+
+/** Studs and nuts on a flange: `back` is the flange back face, `u` points to its face, `thick` the flange thickness. */
+export function flangeBolts(fl: { bc: number; bolts: number; boltDiaMm: number; tf: number; rfHeight: number }, back: V3, u: V3, thick = fl.tf + fl.rfHeight): Shape[] {
+  const d = fl.boltDiaMm;
+  return boltRing(back, u, fl.bc, fl.bolts, d, -(d * 1.25 + 4), thick + 1.6, 0);
+}

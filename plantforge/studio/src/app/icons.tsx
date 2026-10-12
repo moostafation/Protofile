@@ -54,6 +54,12 @@ const P: Record<string, string> = {
   lock: "M6 11h12v10H6zM8.5 11V8a3.5 3.5 0 017 0v3",
   user: "M12 12a4 4 0 100-8 4 4 0 100 8zM4 21c1-4 4-6 8-6s7 2 8 6",
   status: "M5 5h6v6H5zM13 13h6v6h-6zM13 5l6 6M19 5l-6 6M5 13h6v6H5z",
+  pipe: "M3 9h18M3 15h18M3 9v6M21 9v6",
+  elbow: "M4 21v-9a8 8 0 018-8h9M9 21v-9a3 3 0 013-3h9",
+  flange: "M9 4v16M12 4v16M3 9h6M3 15h6M12 9h9M12 15h9",
+  gasket: "M10 4v16M14 4v16M6 8h12M6 16h12",
+  shoe: "M4 8h16M12 8v9M7 17h10",
+  qsave: "M5 3h11l3 3v15H5zM8 3v6h7V3M8 21v-7h8v7",
   eye: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 100 6 3 3 0 100-6z",
 };
 

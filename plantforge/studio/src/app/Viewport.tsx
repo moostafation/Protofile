@@ -3,6 +3,7 @@ import { fmtENU } from "../engine/vec";
 import { Viewer, ViewName } from "../viewer/Viewer";
 import { activateTool, hub } from "./hub";
 import { Icon } from "./icons";
+import { useStatus } from "./status";
 import { useStore } from "./store";
 
 export function Viewport() {
@@ -32,8 +33,13 @@ export function Viewport() {
       const y = Math.min(ev.clientY - r.top + 18, r.height - el.offsetHeight - 8);
       el.style.transform = `translate(${Math.max(8, x)}px, ${Math.max(8, y)}px)`;
     };
-    v.onCursor = (p) => setCursor(p ? fmtENU(p) : "");
+    v.onCursor = (p) => {
+      const t = p ? fmtENU(p) : "";
+      setCursor(t);
+      useStatus.setState({ cursor: t });
+    };
     const st = useStore.getState();
+    v.labelsOn = st.labels;
     v.setModel(st.model);
     v.setClashes(st.model.clashes, st.showClashes);
     v.setSelection(st.selection);
@@ -63,28 +69,41 @@ export function Viewport() {
   }, [workingZ]);
   const setWorkingZ = (z: number) => useStore.getState().set({ workingZ: z });
 
-  const view = (n: ViewName) => hub.viewer?.setView(n);
+  const VIEW_NAMES: Record<string, string> = { iso: "Iso SE", "iso-sw": "Iso SW", "iso-nw": "Iso NW", "iso-ne": "Iso NE", plan: "Plan", north: "Elevation N", east: "Elevation E", south: "Elevation S", west: "Elevation W" };
+  const view = (n: ViewName) => {
+    hub.viewer?.setView(n);
+    useStatus.setState({ view: VIEW_NAMES[n] ?? n });
+  };
   const box = hub.viewer?.modelBoundsMM();
 
   return (
     <section className="viewport" aria-label="3D model">
+      <div className="vp-doc" aria-hidden="true">
+        <span className="vp-doc-tab">3D View 1 · Model</span>
+      </div>
       <div className="vp-host" ref={host} />
       <div className="vp-tip" ref={tipRef} hidden />
       <div className="vp-views" role="toolbar" aria-label="Views">
-        <button type="button" onClick={() => view("iso")} title="South-east isometric">
-          SE ISO
+        <button type="button" onClick={() => view("iso-sw")} title="Isometric from the south-west">
+          Iso SW
         </button>
-        <button type="button" onClick={() => view("iso-sw")} title="South-west isometric">
-          SW ISO
+        <button type="button" onClick={() => view("iso")} title="Isometric from the south-east">
+          Iso SE
+        </button>
+        <button type="button" onClick={() => view("iso-ne")} title="Isometric from the north-east">
+          Iso NE
+        </button>
+        <button type="button" onClick={() => view("iso-nw")} title="Isometric from the north-west">
+          Iso NW
         </button>
         <button type="button" onClick={() => view("plan")} title="Plan (looking down)">
-          PLAN
+          Plan
         </button>
         <button type="button" onClick={() => view("north")} title="Elevation looking north">
-          ELEV N
+          Elev N
         </button>
         <button type="button" onClick={() => view("east")} title="Elevation looking west">
-          ELEV E
+          Elev E
         </button>
         <button type="button" onClick={() => hub.viewer?.fit()} title="Fit all (F)">
           <Icon name="fit" size={15} />

@@ -4,14 +4,24 @@ import { EPS, V3, add, addScaled, anyPerp, cross, dot, len, norm, rotate, scale,
 
 export type Basis = readonly [V3, V3, V3];
 
-export type Shape =
+/**
+ * Material hint for the viewer ("casing", "motor", "concrete", "bolt"...). Geometry, clash and exports ignore it.
+ * A box with m = "ibeam" is drawn as an I-section: ax[2] along the member, ax[1] the web (depth), ax[0] the flanges.
+ */
+export type Finish = string;
+
+export type Shape = (
   | { t: "cyl"; a: V3; b: V3; r: number }
   | { t: "fru"; a: V3; b: V3; ra: number; rb: number }
   | { t: "box"; c: V3; ax: Basis; h: V3 } // oriented box: centre, unit axes, half extents
   | { t: "sph"; c: V3; r: number }
   | { t: "ell"; c: V3; ax: Basis; r: V3 } // ellipsoid: centre, unit axes, radii
   | { t: "tor"; c: V3; s: V3; n: V3; ang: number; r: number } // swept circle along an arc
-  | { t: "cap"; a: V3; b: V3; r: number }; // capsule (used by the auto-router)
+  | { t: "cap"; a: V3; b: V3; r: number } // capsule (used by the auto-router)
+) & { m?: Finish };
+
+/** The same shapes with a viewer finish. */
+export const finish = (m: Finish, ...shapes: Shape[]): Shape[] => shapes.map((s) => ({ ...s, m }));
 
 export interface AABB {
   lo: V3;

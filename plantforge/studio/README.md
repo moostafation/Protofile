@@ -7,6 +7,27 @@
 
 ![](../docs/img/studio.png)
 
+## الشكل: Desktop زي E3D
+
+- **3D View:** خلفية Navy متدرجة زي E3D، وإضاءة Headlight، و Ambient occlusion بيظهر أول ما الكاميرا تقف.
+  وكل قطعة بلونها: المواسير بلون كل خط، والبلوف حمرا، والحديد برتقالي، والخرسانة رمادي، والـ Handrails صفرا.
+- **تفاصيل حقيقية:**
+  - مسامير وصواميل كاملة على كل فلانشة.
+  - حديد I-beam حقيقي، ومعاه Bracing و Base plates وقواعد خرسانة.
+  - طلمبات بـ Casing و Motor بزعانف تبريد، و Coupling guard أصفر، و Plinth.
+  - أعمدة وأوعية بـ Platforms و Ladders و Davit.
+  - تانك بـ Spiral stair و Roof handrail.
+  - الحاجات دي للعرض بس، ومش داخلة في الـ Clash.
+- **الواجهة:** Title bar فيه Quick access (Save و Undo و Redo)، و Ribbon بأيقونات ملونة حسب التخصص.
+  - **Model Explorer** بشجرة E3D: WORLD ← SITE ← ZONE ← EQUI / PIPE ← BRAN ← ELBO و FLAN و VALV...
+  - **Attributes** على شكل Property grid.
+  - **Command Window** و Status bar فيه الإحداثيات.
+- **أوامر بأسلوب E3D:** `/P-101A` بتخلّي العنصر هو الـ Current element، و `CE` و `Q POS` و `Q ATT`، و `AT E 1000 N 2000 U 0` و `BY E 500`.
+
+![](../docs/img/studio_3d.png)
+
+![](../docs/img/studio_column.png)
+
 ## المميزات
 
 | | |
@@ -23,8 +44,9 @@
 | **MTO و Line list** | بيتحدّثوا لحظياً، ومعاهم عدد اللحامات والـ Inch-dia |
 | **مساعد ذكاء اصطناعي** | اكتب له بالعربي أو الإنجليزي، زي: "ضيف طلمبة احتياطي ووصّلها". هو بيحط المعدات ويوصّل ويضيف البلوف ويعمل Clash check، وكل خطوة ليها Undo |
 | **حفظ وتصدير** | حفظ في حسابك على Claude، وحفظ تلقائي في المتصفح. وتصدير Zip فيه PCF و DXF و SVG و MTO و JSON و TOML (لملفات IFC عن طريق محرك Python) |
-| **Command line** | `HELP` · `CONNECT A/N1 B/N2` · `NEW PUMP AT E 0 N 0` · `MOVE P-101A E 500` · `REROUTE` · `ISO` · `CLASH 50` |
-| **مراجعة** | View cube، و Plan و Elevations، و Section box، و Measure، و Labels، و Undo/Redo بلا حدود |
+| **Command Window** | `HELP` · `CONNECT A/N1 B/N2` · `NEW PUMP AT E 0 N 0` · `MOVE P-101A E 500` · `REROUTE` · `ISO` · `CLASH 50`، وكمان أوامر E3D: `/NAME` و `Q POS` و `Q ATT` و `AT` و `BY` |
+| **مراجعة** | View cube، و Iso من الأربع اتجاهات، و Plan و Elevations، و Section box، و Measure، و Labels، و Color by status، و Undo/Redo بلا حدود |
+| **المثال الجاهز** | وحدة Feed و Stripper فيها 9 معدات و 15 خط، وكلها متوصلة بالـ Auto-router من غير ولا Clash: Surge drum وطلمبتين، ومبادل، و Stripper column ارتفاعه 21 m، و Reflux drum وطلمبتين، وتانك، و Pipe rack بدورين |
 
 ## قاعدة البيانات (Plant Database) زي SP3D
 

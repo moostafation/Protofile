@@ -26,7 +26,7 @@ export function SidePanel() {
   const todoWarn = model.todo.filter((t) => t.level === "warning").length;
   const hard = (model.clashes ?? []).filter((c) => c.hard).length;
   const tabs: [Panel, string, React.ReactNode][] = [
-    ["props", "Properties", null],
+    ["props", "Attributes", null],
     ["todo", "To-Do", todoErr ? <b className="badge crit">{todoErr}</b> : todoWarn ? <b className="badge warn">{todoWarn}</b> : null],
     ["clash", "Clashes", hard ? <b className="badge crit">{hard}</b> : <b className="badge ok">0</b>],
     ["mto", "MTO", null],

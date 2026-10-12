@@ -4,7 +4,9 @@
 import { catalog } from "./catalog";
 import type { EquipmentDoc, NozzleDoc, NozzlePlace, TemplateId } from "./doc";
 import { Comp, port } from "./model";
-import { Basis, Shape, WORLD, boxMinMax, cyl, ell, fru, transformShape } from "./shapes";
+import { boltRing, ladder, octFoundation, plinth, ringPlatform, spiralStair } from "./deco";
+import { flangeBolts } from "./parts";
+import { Basis, Shape, WORLD, boxMinMax, cyl, ell, finish, fru, transformShape } from "./shapes";
 import { V3, add, addScaled, rotZ, scale } from "./vec";
 
 export interface ParamSpec {
@@ -25,6 +27,8 @@ export interface Template {
   paramSpecs: ParamSpec[];
   nozzles: NozzleDoc[];
   build(p: Record<string, number>): Shape[];
+  /** Detail for the 3D view only: foundations, ladders, platforms, bolting. */
+  deco?(p: Record<string, number>): Shape[];
   /** Local nozzle face position, outward direction and the radius of the surface it sits on. */
   nozzle(p: Record<string, number>, place: NozzlePlace, proj: number): { pos: V3; dir: V3; base: V3 };
 }
@@ -96,18 +100,37 @@ export const TEMPLATES: Record<TemplateId, Template> = {
       const z = p.shaftZ;
       const R = p.casingD / 2;
       return [
-        boxMinMax([0, -p.width / 2, 0], [p.length, p.width / 2, p.baseH]),
-        boxMinMax([cx - 220, -260, p.baseH], [cx + 220, 260, z - R + 60]),
-        cyl([cx - cw / 2, 0, z], [cx + cw / 2, 0, z], R),
-        ell([cx, 0, z], AX_X, [R * 0.92, R * 0.92, cw * 0.62]),
-        cyl([cx + cw / 2, 0, z], [brgEnd, 0, z], 170),
-        boxMinMax([cx + cw / 2 + 60, -180, p.baseH], [brgEnd - 40, 180, z - 120]),
-        boxMinMax([brgEnd, -170, z - 170], [cplEnd, 170, z + 170]),
-        cyl([cplEnd, 0, z], [motEnd, 0, z], p.motorD / 2),
-        ell([motEnd, 0, z], AX_X, [p.motorD * 0.47, p.motorD * 0.47, 160]),
-        boxMinMax([cplEnd + 80, -p.motorD * 0.42, p.baseH], [motEnd - 80, p.motorD * 0.42, z - p.motorD * 0.3]),
-        boxMinMax([cplEnd + p.motorL * 0.35, -140, z + p.motorD / 2 - 20], [cplEnd + p.motorL * 0.6, 140, z + p.motorD / 2 + 170]),
+        ...finish("base", boxMinMax([0, -p.width / 2, 0], [p.length, p.width / 2, p.baseH])),
+        ...finish(
+          "casing",
+          boxMinMax([cx - 220, -260, p.baseH], [cx + 220, 260, z - R + 60]),
+          cyl([cx - cw / 2, 0, z], [cx + cw / 2, 0, z], R),
+          ell([cx, 0, z], AX_X, [R * 0.92, R * 0.92, cw * 0.62]),
+          cyl([cx + cw / 2, 0, z], [brgEnd, 0, z], 170),
+          boxMinMax([cx + cw / 2 + 60, -180, p.baseH], [brgEnd - 40, 180, z - 120]),
+        ),
+        ...finish("guard", boxMinMax([brgEnd, -170, z - 170], [cplEnd, 170, z + 170])),
+        ...finish(
+          "motor",
+          cyl([cplEnd, 0, z], [motEnd, 0, z], p.motorD / 2),
+          ell([motEnd, 0, z], AX_X, [p.motorD * 0.47, p.motorD * 0.47, 160]),
+          boxMinMax([cplEnd + 80, -p.motorD * 0.42, p.baseH], [motEnd - 80, p.motorD * 0.42, z - p.motorD * 0.3]),
+          boxMinMax([cplEnd + p.motorL * 0.35, -140, z + p.motorD / 2 - 20], [cplEnd + p.motorL * 0.6, 140, z + p.motorD / 2 + 170]),
+        ),
       ];
+    },
+    deco(p) {
+      const { cx, cw, cplEnd, motEnd } = pumpLayout(p);
+      const z = p.shaftZ;
+      const out: Shape[] = [plinth([-150, -p.width / 2 - 150, 0], [p.length + 150, p.width / 2 + 150, 0], 0, 300)];
+      // motor cooling fins and fan cowl
+      for (let x = cplEnd + 140; x < motEnd - 120; x += 95) out.push({ ...cyl([x, 0, z], [x + 22, 0, z], p.motorD / 2 + 22), m: "motor" });
+      out.push({ ...cyl([motEnd - 40, 0, z], [motEnd + 140, 0, z], p.motorD / 2 + 8), m: "motor" });
+      // volute tongue and casing bolting
+      out.push(...boltRing([cx + cw / 2, 0, z], [1, 0, 0], p.casingD * 0.92, 12, 20, -30, 30, 30));
+      // drain and vent bosses
+      out.push({ ...cyl([cx, 0, z - p.casingD / 2], [cx, 0, z - p.casingD / 2 - 60], 30), m: "casing" });
+      return out;
     },
     nozzle(p, place, proj) {
       const { cx, cw } = pumpLayout(p);
@@ -138,13 +161,29 @@ export const TEMPLATES: Record<TemplateId, Template> = {
       const tl = p.skirt;
       const tt = p.skirt + p.H;
       return [
-        cyl([0, 0, 0], [0, 0, 30], R + 160),
-        cyl([0, 0, 0], [0, 0, tl], R),
-        cyl([0, 0, tl], [0, 0, tt], R),
-        ell([0, 0, tt], WORLD, [R, R, R / 2]),
-        cyl([0, 0, tl - 20], [0, 0, tl + 20], R + 25),
-        cyl([0, 0, tt - 20], [0, 0, tt + 20], R + 25),
+        ...finish("steel", cyl([0, 0, 0], [0, 0, 30], R + 160)),
+        ...finish("skirt", cyl([0, 0, 0], [0, 0, tl], R)),
+        ...finish("shell", cyl([0, 0, tl], [0, 0, tt], R), ell([0, 0, tt], WORLD, [R, R, R / 2]), cyl([0, 0, tl - 20], [0, 0, tl + 20], R + 25), cyl([0, 0, tt - 20], [0, 0, tt + 20], R + 25)),
       ];
+    },
+    deco(p) {
+      const R = p.D / 2;
+      const tt = p.skirt + p.H;
+      const out: Shape[] = [octFoundation([0, 0, 0], R + 700, 0, 450)];
+      // skirt access opening frame and anchor chairs
+      for (let a = 0; a < 360; a += 45) {
+        const d: V3 = [Math.sin(rad(a + 22.5)), Math.cos(rad(a + 22.5)), 0];
+        out.push({ ...cyl(addScaled([0, 0, 30], d, R + 90), addScaled([0, 0, 260], d, R + 90), 45), m: "steel" });
+      }
+      // ladder on the east side to platforms every 6 m and at the top, clear of the process nozzles (N, S, W)
+      const ladDir: V3 = [Math.sin(rad(100)), Math.cos(rad(100)), 0];
+      out.push(...ladder(addScaled([0, 0, 0], ladDir, R + 260), tt - 250, ladDir));
+      for (let lv = p.skirt + 4500; lv < tt - 3000; lv += 6000) out.push(...ringPlatform([0, 0, 0], lv, R + 60, 900, 45, 160));
+      out.push(...ringPlatform([0, 0, 0], tt - 250, R + 60, 900, 45, 160));
+      // davit on the top head
+      out.push({ ...cyl([0, R * 0.55, tt + R * 0.35], [0, R * 0.55, tt + R * 0.35 + 1600], 40), m: "rail" });
+      out.push({ ...cyl([0, R * 0.55, tt + R * 0.35 + 1600], [0, R * 0.55 - 900, tt + R * 0.35 + 1600], 35), m: "rail" });
+      return out;
     },
     nozzle(p, place, proj) {
       return vesselShell(place, proj, p.D / 2, p.skirt + p.H);
@@ -169,12 +208,15 @@ export const TEMPLATES: Record<TemplateId, Template> = {
     build(p) {
       const R = p.D / 2;
       const h = p.L / 2;
-      const out: Shape[] = [cyl([-h, 0, p.cl], [h, 0, p.cl], R), ell([-h, 0, p.cl], WORLD, [R / 2, R, R]), ell([h, 0, p.cl], WORLD, [R / 2, R, R])];
+      const out: Shape[] = finish("shell", cyl([-h, 0, p.cl], [h, 0, p.cl], R), ell([-h, 0, p.cl], WORLD, [R / 2, R, R]), ell([h, 0, p.cl], WORLD, [R / 2, R, R]));
       for (const x of [-0.3 * p.L, 0.3 * p.L]) {
-        out.push(boxMinMax([x - 130, -R * 0.8, 0], [x + 130, R * 0.8, p.cl - R * 0.75]));
-        out.push(boxMinMax([x - 12, -R * 0.75, p.cl - R * 0.75], [x + 12, R * 0.75, p.cl - R * 0.45]));
+        out.push(...finish("saddle", boxMinMax([x - 130, -R * 0.8, 0], [x + 130, R * 0.8, p.cl - R * 0.75]), boxMinMax([x - 12, -R * 0.75, p.cl - R * 0.75], [x + 12, R * 0.75, p.cl - R * 0.45])));
       }
       return out;
+    },
+    deco(p) {
+      const R = p.D / 2;
+      return [-0.3 * p.L, 0.3 * p.L].map((x) => plinth([x - 400, -R * 0.8 - 250, 0], [x + 400, R * 0.8 + 250, 0], 0, 400));
     },
     nozzle(p, place, proj) {
       const R = p.D / 2;
@@ -203,13 +245,22 @@ export const TEMPLATES: Record<TemplateId, Template> = {
       const rs = p.shellD / 2;
       const rc = p.chanD / 2;
       const out: Shape[] = [
-        cyl([-p.chanL - 70, 0, p.cl], [-p.chanL, 0, p.cl], rc + 90),
-        cyl([-p.chanL, 0, p.cl], [0, 0, p.cl], rc),
-        cyl([-70, 0, p.cl], [70, 0, p.cl], rc + 90),
-        cyl([0, 0, p.cl], [p.shellL, 0, p.cl], rs),
-        ell([p.shellL, 0, p.cl], WORLD, [rs / 2, rs, rs]),
+        ...finish("channel", cyl([-p.chanL - 70, 0, p.cl], [-p.chanL, 0, p.cl], rc + 90), cyl([-p.chanL, 0, p.cl], [0, 0, p.cl], rc), cyl([-70, 0, p.cl], [70, 0, p.cl], rc + 90)),
+        ...finish("shell", cyl([0, 0, p.cl], [p.shellL, 0, p.cl], rs), ell([p.shellL, 0, p.cl], WORLD, [rs / 2, rs, rs])),
       ];
-      for (const x of [0.15 * p.shellL, 0.85 * p.shellL]) out.push(boxMinMax([x - 110, -rs * 0.85, 0], [x + 110, rs * 0.85, p.cl - rs * 0.6]));
+      for (const x of [0.15 * p.shellL, 0.85 * p.shellL]) out.push(...finish("saddle", boxMinMax([x - 110, -rs * 0.85, 0], [x + 110, rs * 0.85, p.cl - rs * 0.6])));
+      return out;
+    },
+    deco(p) {
+      const rs = p.shellD / 2;
+      const rc = p.chanD / 2;
+      const out: Shape[] = [];
+      for (const x of [0.15 * p.shellL, 0.85 * p.shellL]) out.push(plinth([x - 350, -rs * 0.85 - 200, 0], [x + 350, rs * 0.85 + 200, 0], 0, 400));
+      // girth flange and channel cover bolting
+      out.push(...boltRing([-70, 0, p.cl], [1, 0, 0], (rc + 45) * 2, 28, 22, -40, 180, -10));
+      out.push(...boltRing([-p.chanL, 0, p.cl], [-1, 0, 0], (rc + 45) * 2, 28, 22, -40, 110, -10));
+      // lifting lugs
+      for (const x of [0.3 * p.shellL, 0.7 * p.shellL]) out.push({ ...boxMinMax([x - 60, -15, p.cl + rs - 20], [x + 60, 15, p.cl + rs + 110]), m: "shell" });
       return out;
     },
     nozzle(p, place, proj) {
@@ -230,7 +281,24 @@ export const TEMPLATES: Record<TemplateId, Template> = {
     nozzles: [nz("N1", "6", 300, "Outlet", { kind: "shell", elev: 600, orient: 270 }), nz("N2", "4", 300, "Inlet", { kind: "shell", elev: 7800, orient: 300 })],
     build(p) {
       const R = p.D / 2;
-      return [cyl([0, 0, 0], [0, 0, 12], R + 60), cyl([0, 0, 0], [0, 0, p.H], R), fru([0, 0, p.H], [0, 0, p.H + R / 6], R + 40, 350)];
+      return [...finish("steel", cyl([0, 0, 0], [0, 0, 12], R + 60)), ...finish("tankshell", cyl([0, 0, 0], [0, 0, p.H], R)), ...finish("roof", fru([0, 0, p.H], [0, 0, p.H + R / 6], R + 40, 350))];
+    },
+    deco(p) {
+      const R = p.D / 2;
+      const out: Shape[] = [{ ...cyl([0, 0, -500], [0, 0, 0], R + 450), m: "concrete" }];
+      // shell courses (plate seams) and top angle
+      for (let z = 2400; z < p.H; z += 2400) out.push({ t: "tor", c: [0, 0, z], s: [R + 4, 0, z], n: [0, 0, 1], ang: Math.PI * 2, r: 9, m: "seam" });
+      out.push({ t: "tor", c: [0, 0, p.H], s: [R + 30, 0, p.H], n: [0, 0, 1], ang: Math.PI * 2, r: 40, m: "steel" });
+      // roof handrail, spiral stair and roof manway
+      const roofZ = (r: number) => p.H + (R / 6) * (1 - (r - 350) / (R + 40 - 350));
+      for (const h of [550, 1100]) out.push({ t: "tor", c: [0, 0, roofZ(R - 200) + h], s: [R - 200, 0, roofZ(R - 200) + h], n: [0, 0, 1], ang: Math.PI * 1.5, r: h > 600 ? 24 : 16, m: "rail" });
+      for (let a = 0; a < 270; a += 18) {
+        const d: V3 = [Math.cos(rad(a)), Math.sin(rad(a)), 0];
+        out.push({ ...cyl(addScaled([0, 0, roofZ(R - 200)], d, R - 200), addScaled([0, 0, roofZ(R - 200) + 1100], d, R - 200), 22), m: "rail" });
+      }
+      out.push(...spiralStair([0, 0, 0], R, p.H, 95, 125));
+      out.push({ ...cyl([R * 0.45, R * 0.2, roofZ(R * 0.5) - 50], [R * 0.45, R * 0.2, roofZ(R * 0.5) + 250], 330), m: "roof" });
+      return out;
     },
     nozzle(p, place, proj) {
       return vesselShell(place, proj, p.D / 2, p.H);
@@ -264,6 +332,7 @@ export function buildEquipment(eq: EquipmentDoc): BuiltEquipment {
     nps: "",
     ports: [],
     shapes: t.build(p).map((s) => transformShape(s, eq.rot, eq.origin)),
+    deco: (t.deco?.(p) ?? []).map((s) => transformShape(s, eq.rot, eq.origin)),
     desc: eq.description || t.description,
     skey: "",
     props: { template: eq.template, ifc: t.ifc },
@@ -280,7 +349,8 @@ export function buildEquipment(eq: EquipmentDoc): BuiltEquipment {
       kind: "NOZZLE",
       nps: n.nps,
       ports: [port("FACE", pos, dir, "FL", n.nps)],
-      shapes: [cyl(base, neckEnd, od / 2), cyl(neckEnd, pos, fl.o / 2)],
+      shapes: [{ ...cyl(base, neckEnd, od / 2), m: "nozzle" }, { ...cyl(neckEnd, pos, fl.o / 2), m: "nozzle" }],
+      deco: flangeBolts(fl, neckEnd, dir),
       desc: `NOZZLE ${n.name} ${n.service ? n.service.toUpperCase() + " " : ""}NPS ${n.nps} CL150 RF`,
       skey: "",
       props: { service: n.service, proj: n.proj, equipment: eq.id, name: n.name },

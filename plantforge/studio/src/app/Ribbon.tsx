@@ -31,8 +31,9 @@ function Btn(p: { icon: string; label: string; onClick: () => void; active?: boo
   );
 }
 
-const Group = ({ title, children }: { title: string; children: React.ReactNode }) => (
-  <div className="rb-group">
+/** A ribbon group; `tone` colours its icons by discipline, as plant design ribbons do. */
+const Group = ({ title, children, tone = "general" }: { title: string; children: React.ReactNode; tone?: "general" | "equipment" | "piping" | "steel" | "review" | "data" | "output" }) => (
+  <div className="rb-group" data-tone={tone}>
     <div className="rb-items">{children}</div>
     <div className="rb-title">{title}</div>
   </div>
@@ -76,6 +77,9 @@ export function Ribbon() {
   return (
     <nav className="ribbon" aria-label="Tools">
       <div className="rb-tabs" role="tablist">
+        <button type="button" className="rb-file" onClick={() => s.set({ projectsOpen: true })} title="Projects: new, open, save, shared plants">
+          FILE
+        </button>
         {TABS.map(([id, label]) => (
           <button key={id} id={`tab-${id}`} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>
             {label}
@@ -105,12 +109,12 @@ export function Ribbon() {
         )}
         {tab === "equipment" && (
           <>
-            <Group title="Place equipment">
+            <Group title="Place equipment" tone="equipment">
               {(Object.keys(TEMPLATES) as TemplateId[]).map((t) => (
                 <Btn key={t} icon={t} label={TEMPLATES[t].name.replace("Shell & tube exchanger", "Exchanger")} active={tool === "place" && s.template === t} onClick={() => setTool("place", { template: t })} />
               ))}
             </Group>
-            <Group title="Selected equipment">
+            <Group title="Selected equipment" tone="equipment">
               <Btn icon="move" label="Move" active={tool === "move"} onClick={() => setTool("move")} disabled={!focusEq} />
               <Btn icon="rotate" label="Rotate 90°" disabled={!focusEq} onClick={() => focusEq && s.apply(moveEquipment(s.doc, focusEq.id, focusEq.origin, (focusEq.rot + 90) % 360), `Rotate ${focusEq.tag}`)} />
               <Btn icon="nozzle" label="Add nozzle" disabled={!focusEq || focusEq.template === "pump"} onClick={() => focusEq && s.apply(addNozzle(s.doc, focusEq.id), `Add nozzle to ${focusEq.tag}`)} />
@@ -119,7 +123,7 @@ export function Ribbon() {
         )}
         {tab === "piping" && (
           <>
-            <Group title="Route">
+            <Group title="Route" tone="piping">
               <Btn id="tool-route" icon="route" label="Route pipe" active={tool === "route"} onClick={() => setTool("route")} />
               <Btn id="tool-connect" icon="connect" label="Auto-route" active={tool === "connect"} onClick={() => setTool("connect")} title="Pick two nozzles: the router finds a clash-free path" />
               <Btn
@@ -135,12 +139,12 @@ export function Ribbon() {
                 }}
               />
             </Group>
-            <Group title="Insert on a pipe">
+            <Group title="Insert on a pipe" tone="piping">
               {(["gate", "globe", "check", "tee"] as const).map((t) => (
                 <Btn key={t} icon={t} label={t === "tee" ? "Tee + branch" : `${t[0].toUpperCase()}${t.slice(1)} valve`} active={tool === "insert" && s.inlineType === t} onClick={() => setTool("insert", { inlineType: t })} />
               ))}
             </Group>
-            <Group title="New line settings">
+            <Group title="New line settings" tone="piping">
               <div className="rb-fields">
                 <label>
                   Spec
@@ -181,13 +185,13 @@ export function Ribbon() {
           </>
         )}
         {tab === "structure" && (
-          <Group title="Steel">
+          <Group title="Steel" tone="steel">
             <Btn icon="rack" label="Pipe rack" active={tool === "rack"} onClick={() => setTool("rack")} />
           </Group>
         )}
         {tab === "review" && (
           <>
-            <Group title="Interference">
+            <Group title="Interference" tone="review">
               <Btn icon="clash" label={`Clash check${hard ? ` (${hard})` : ""}`} onClick={() => (s.rerunClash(), s.set({ panel: "clash" }))} />
               <Btn icon="eye" label="Show clashes" active={s.showClashes} onClick={() => s.set({ showClashes: !s.showClashes })} />
               <div className="rb-fields">
@@ -197,7 +201,7 @@ export function Ribbon() {
                 </label>
               </div>
             </Group>
-            <Group title="Reports">
+            <Group title="Reports" tone="review">
               <Btn icon="todo" label="To-Do list" onClick={() => s.set({ panel: "todo" })} />
               <Btn icon="mto" label="MTO" onClick={() => s.set({ panel: "mto" })} />
               <Btn icon="lines" label="Line list" onClick={() => s.set({ panel: "lines" })} />
@@ -206,30 +210,30 @@ export function Ribbon() {
         )}
         {tab === "database" && (
           <>
-            <Group title="Plant database">
+            <Group title="Plant database" tone="data">
               <Btn id="db-open" icon="database" label="Manager" onClick={() => openDb("overview")} title="Plant database: tables, backup and restore" />
               <Btn icon="table" label="Catalog & specs" onClick={() => openDb("catalog")} />
               <Btn icon="terminal" label="SQL & reports" onClick={() => openDb("sql")} />
               <Btn icon="history" label="Transactions" onClick={() => openDb("history")} />
             </Group>
-            <Group title="Approval">
+            <Group title="Approval" tone="data">
               <Btn icon="shield" label="Objects" onClick={() => openDb("objects")} title="Every object with its status, permission group, system and revision" />
               <Btn id="color-status" icon="status" label="Color by status" active={s.colorBy === "status"} onClick={() => s.set({ colorBy: s.colorBy === "status" ? "line" : "status" })} />
               <Btn icon="send" label="Submit for review" disabled={!owners.length} onClick={() => setStatus("In Review")} />
               <Btn id="approve-sel" icon="tick" label="Approve" disabled={!owners.length || !s.user.canApprove} onClick={() => setStatus("Approved")} title={s.user.canApprove ? "Approve the selected objects (locks them)" : "Only editors can approve"} />
               <Btn icon="undo" label="Back to Working" disabled={!owners.length} onClick={() => setStatus("Working")} />
             </Group>
-            <Group title="Workshare">
+            <Group title="Workshare" tone="data">
               <Btn id="shared-open" icon="user" label={s.shared ? "Shared plant" : "Share plant"} active={!!s.shared} onClick={() => s.set({ projectsOpen: true })} title="Work on one plant with your team, live" />
             </Group>
           </>
         )}
         {tab === "drawings" && (
           <>
-            <Group title="Drawings">
+            <Group title="Drawings" tone="output">
               <Btn icon="iso_dwg" label="Isometric" onClick={() => s.set({ isoLine: focusLine?.id ?? s.doc.lines[0]?.id ?? null })} disabled={!s.doc.lines.length} />
             </Group>
-            <Group title="Export">
+            <Group title="Export" tone="output">
               <Btn icon="download" label="Package .zip" onClick={() => exportCurrent("zip")} title="PCF + isometric DXF/SVG + MTO + model, in one zip" />
               <Btn icon="mto" label="MTO .csv" onClick={() => exportCurrent("csv")} />
               <Btn icon="download" label="Model .json" onClick={() => exportCurrent("json")} />

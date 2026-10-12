@@ -34,6 +34,8 @@ export interface Comp {
   nps: string;
   ports: Port[];
   shapes: Shape[];
+  /** Detail drawn by the viewer only (bolts, ladders, platforms, foundations): not clashed, not exported. */
+  deco?: Shape[];
   desc: string;
   skey: string;
   props: Record<string, any>;

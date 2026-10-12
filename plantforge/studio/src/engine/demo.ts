@@ -68,10 +68,12 @@ function onLastLeg(doc: PlantDoc, lineId: string, type: "gate" | "check" | "glob
 }
 
 export function demoDoc(): PlantDoc {
-  let d: PlantDoc = { ...emptyDoc(), project: { name: "Feed Section Demo", plant: "PlantForge Demo Refinery", area: "A-100", unit: "U-110 Feed" } };
-  let drum: string, pa: string, pb: string, ex: string, tk: string, header: string, tee: string, l: string;
-  [d] = addRack(d, [0, 0, 0], "x", 30000, 6000, [5000, 7000]);
+  let d: PlantDoc = { ...emptyDoc(), project: { name: "Feed & Stripper Unit", plant: "PlantForge Demo Refinery", area: "A-100", unit: "U-110 Feed / Stripper" } };
+  let drum: string, pa: string, pb: string, ex: string, tk: string, col: string, rd: string, ra: string, rb: string;
+  let header: string, tee: string, l: string, reflux: string;
+  [d] = addRack(d, [0, 0, 0], "x", 36000, 6000, [5000, 7000]);
 
+  // ---- feed section (north of the rack)
   [d, drum] = addEquipment(d, "vvessel", [6000, 10500, 0], 0, "V-101");
   d = updateEquipment(d, drum, {
     description: "Feed surge drum",
@@ -87,35 +89,76 @@ export function demoDoc(): PlantDoc {
   [d, pb] = addEquipment(d, "pump", [2500, 6300, 0], -90, "P-101B");
   d = updateEquipment(d, pa, { description: "Feed pump (duty)" });
   d = updateEquipment(d, pb, { description: "Feed pump (standby)" });
-  [d, ex] = addEquipment(d, "exchanger", [22000, -7500, 0], 0, "E-101");
-  d = updateEquipment(d, ex, { description: "Feed / effluent exchanger" });
-  [d, tk] = addEquipment(d, "tank", [31000, -15500, 0], 0, "T-101");
+
+  // ---- stripper section (south of the rack) and reflux (north)
+  [d, ex] = addEquipment(d, "exchanger", [15000, -7000, 0], 0, "E-101");
+  d = updateEquipment(d, ex, { description: "Feed / bottoms exchanger" });
+  [d, col] = addEquipment(d, "vvessel", [26000, -8500, 0], 0, "C-201");
+  d = updateEquipment(d, col, {
+    description: "Stripper column",
+    params: { ...TEMPLATES.vvessel.params, D: 1800, H: 18000, skirt: 3000 },
+    nozzles: [
+      { name: "N1", nps: "4", proj: 300, service: "Feed", place: { kind: "shell", elev: 12500, orient: 0 } },
+      { name: "N2", nps: "6", proj: 300, service: "Bottoms", place: { kind: "shell", elev: 3500, orient: 270 } },
+      { name: "N3", nps: "6", proj: 300, service: "Overhead vapour", place: { kind: "top", dx: 0, dy: 0 } },
+      { name: "N4", nps: "4", proj: 300, service: "Reflux", place: { kind: "shell", elev: 19500, orient: 0 } },
+    ],
+  });
+  [d, rd] = addEquipment(d, "hdrum", [30500, 10200, 0], 0, "D-201");
+  d = updateEquipment(d, rd, {
+    description: "Reflux drum",
+    params: { ...TEMPLATES.hdrum.params, D: 1600, L: 5000, cl: 2400 },
+    nozzles: [
+      { name: "N1", nps: "6", proj: 250, service: "Inlet", place: { kind: "hshell", station: 2500, angle: 0 } },
+      { name: "N2", nps: "6", proj: 250, service: "Outlet to P-201A", place: { kind: "hshell", station: 1700, angle: 180 } },
+      { name: "N3", nps: "6", proj: 250, service: "Outlet to P-201B", place: { kind: "hshell", station: 3300, angle: 180 } },
+    ],
+  });
+  [d, ra] = addEquipment(d, "pump", [29700, 6300, 0], -90, "P-201A");
+  [d, rb] = addEquipment(d, "pump", [31300, 6300, 0], -90, "P-201B");
+  d = updateEquipment(d, ra, { description: "Reflux pump (duty)" });
+  d = updateEquipment(d, rb, { description: "Reflux pump (standby)" });
+  [d, tk] = addEquipment(d, "tank", [42000, -12500, 0], 0, "T-101");
   d = updateEquipment(d, tk, {
-    description: "Intermediate storage tank",
+    description: "Product storage tank",
     nozzles: [
       { name: "N1", nps: "6", proj: 300, service: "Outlet", place: { kind: "shell", elev: 600, orient: 270 } },
-      { name: "N2", nps: "4", proj: 300, service: "Inlet", place: { kind: "shell", elev: 7800, orient: 270 } },
+      { name: "N2", nps: "6", proj: 300, service: "Inlet", place: { kind: "shell", elev: 7800, orient: 270 } },
     ],
   });
 
+  // ---- feed pumps
   [d] = connect(d, nozzle(drum, "N2"), nozzle(pa, "N1"), '6"-P-1001-A1A', "Pump suction A", 1);
   [d] = connect(d, nozzle(drum, "N4"), nozzle(pb, "N1"), '6"-P-1005-A1A', "Pump suction B", 1);
-  [d, header] = connect(d, nozzle(pa, "N2"), nozzle(ex, "N1"), '4"-P-1002-A1A', "Pump discharge", 0);
+  [d, header] = connect(d, nozzle(pa, "N2"), nozzle(ex, "N1"), '4"-P-1002-A1A', "Pump discharge", 2);
   [d] = onFirstLeg(d, header, "check", 700);
   [d] = onFirstLeg(d, header, "gate", 1450);
   [d, tee] = onFirstLeg(d, header, "tee", 2900, [-1, 0, 0]);
-  [d, l] = connect(d, { kind: "tee", line: header, item: tee }, nozzle(pb, "N2"), '4"-P-1003-A1A', "Pump discharge B", 0);
+  [d, l] = connect(d, { kind: "tee", line: header, item: tee }, nozzle(pb, "N2"), '4"-P-1003-A1A', "Pump discharge B", 2);
   d = onLastLeg(d, l, "check", 700);
   d = onLastLeg(d, l, "gate", 1450);
-  [d] = connect(d, nozzle(ex, "N2"), nozzle(tk, "N2"), '4"-P-1004-A1A', "Exchanger outlet", 2);
+
+  // ---- stripper: feed, overhead, reflux, bottoms, product
+  [d] = connect(d, nozzle(ex, "N2"), nozzle(col, "N1"), '4"-P-1006-A1A', "Preheated feed", 0);
+  [d] = connect(d, nozzle(col, "N3"), nozzle(rd, "N1"), '6"-P-2001-A1A', "Overhead vapour", 5);
+  [d] = connect(d, nozzle(rd, "N2"), nozzle(ra, "N1"), '6"-P-2002-A1A', "Reflux pump suction A", 4);
+  [d] = connect(d, nozzle(rd, "N3"), nozzle(rb, "N1"), '6"-P-2005-A1A', "Reflux pump suction B", 4);
+  [d, reflux] = connect(d, nozzle(ra, "N2"), nozzle(col, "N4"), '4"-P-2003-A1A', "Reflux", 4);
+  [d] = onFirstLeg(d, reflux, "check", 700);
+  [d] = onFirstLeg(d, reflux, "gate", 1450);
+  [d, tee] = onFirstLeg(d, reflux, "tee", 2900, [1, 0, 0]);
+  [d, l] = connect(d, { kind: "tee", line: reflux, item: tee }, nozzle(rb, "N2"), '4"-P-2006-A1A', "Reflux pump B discharge", 4);
+  d = onLastLeg(d, l, "check", 700);
+  d = onLastLeg(d, l, "gate", 1450);
+  [d] = connect(d, nozzle(col, "N2"), nozzle(ex, "N3"), '6"-P-2004-A1A', "Stripper bottoms", 7);
+  [d] = connect(d, nozzle(ex, "N4"), nozzle(tk, "N2"), '6"-P-1004-A1A', "Product to storage", 3);
 
   // battery-limit lines enter the rack from the west, each in its own lane, at its size's shoe elevation
   const east: V3 = [1, 0, 0];
   const west: V3 = [-1, 0, 0];
   const z = (level: number, nps: string) => pipeElevationOn(level, catalog.od(nps));
-  d = connectFree(d, { point: [-1500, -1800, z(5000, "6")], dir: east, ref: nozzle(ex, "N3"), pointIsStart: true, nps: "6", number: '6"-CW-2001-A1A', fluid: "Cooling water supply", color: 3 });
-  d = connectFree(d, { point: [-1500, -600, z(5000, "6")], dir: west, ref: nozzle(ex, "N4"), pointIsStart: false, nps: "6", number: '6"-CW-2002-A1A', fluid: "Cooling water return", color: 4 });
-  d = connectFree(d, { point: [-1500, 1200, z(7000, "4")], dir: east, ref: nozzle(drum, "N1"), pointIsStart: true, nps: "4", number: '4"-P-1000-A1A', fluid: "Feed from battery limit", color: 5 });
+  d = connectFree(d, { point: [-1500, 1200, z(7000, "4")], dir: east, ref: nozzle(drum, "N1"), pointIsStart: true, nps: "4", number: '4"-P-1000-A1A', fluid: "Feed from battery limit", color: 0 });
   d = connectFree(d, { point: [-1500, 2400, z(7000, "3")], dir: west, ref: nozzle(drum, "N3"), pointIsStart: false, nps: "3", number: '3"-VG-3001-A1A', fluid: "Vapour to flare header", color: 6 });
+  d = connectFree(d, { point: [-1500, -1800, z(5000, "6")], dir: west, ref: nozzle(tk, "N1"), pointIsStart: false, nps: "6", number: '6"-P-1007-A1A', fluid: "Product export", color: 3 });
   return d;
 }
