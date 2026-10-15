@@ -1,5 +1,6 @@
 // Connects the single Viewer instance, the active tool and the store.
 
+import { deleteObject } from "../engine/commands";
 import type { Viewer } from "../viewer/Viewer";
 import { Tool, ToolCtx, connectTool, insertTool, measureTool, moveTool, placeTool, rackTool, routeFromNozzle, routeFromTee, routeTool, selectTool } from "../viewer/tools";
 import { CliHooks } from "./cli";
@@ -89,3 +90,14 @@ export const cliHooks: CliHooks = {
     useStore.getState().set({ workingZ: z });
   },
 };
+
+/** Delete the object in focus (Delete key, Edit > Delete). */
+export function deleteFocused(): boolean {
+  const st = useStore.getState();
+  const f = st.focus;
+  if (!f) return false;
+  const label = f.type === "equipment" ? st.doc.equipment.find((e) => e.id === f.id)?.tag : f.type === "line" ? st.doc.lines.find((l) => l.id === f.id)?.number : st.doc.structures.find((x) => x.id === f.id)?.tag;
+  st.apply(deleteObject(st.doc, f), `Delete ${label}`);
+  st.select([], null);
+  return true;
+}

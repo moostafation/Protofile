@@ -58,6 +58,8 @@ export interface State {
   toasts: Toast[];
   savedAt: number | null;
   dirty: boolean;
+  /** The plant database file on this computer (desktop program), null when not saved to a file. */
+  file: { path: string; name: string } | null;
   panel: "props" | "todo" | "clash" | "mto" | "lines";
   isoLine: string | null;
   assistantOpen: boolean;
@@ -123,6 +125,7 @@ export const useStore = create<State & Actions>((set, get) => ({
   toasts: [],
   savedAt: null,
   dirty: false,
+  file: null,
   panel: "props",
   isoLine: null,
   assistantOpen: false,

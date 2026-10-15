@@ -11,6 +11,7 @@ import { EDITABLE, REPORTS } from "../db/schema";
 import { catalogChanged, dbHub, openBytes, resetCatalog } from "../db/service";
 import { databaseZip, reportsZip } from "../db/files";
 import { saveFile } from "../platform/claude";
+import { desktop } from "../platform/desktop";
 import { personName } from "../platform/people";
 import { Modal } from "./Chrome";
 import { hub } from "./hub";
@@ -133,6 +134,7 @@ function Overview({ openSql }: { openSql: (sql: string) => void }) {
   const dbRev = useStore((s) => s.dbRev);
   const user = useStore((s) => s.user);
   const shared = useStore((s) => s.shared);
+  const plantFile = useStore((s) => s.file);
   const project = useStore((s) => s.doc.project);
   const db = dbHub.db!;
   const tables = useMemo(() => db.tables(), [db, dbRev]);
@@ -192,7 +194,7 @@ function Overview({ openSql }: { openSql: (sql: string) => void }) {
         <Stat label="Transactions" value={String(txns)} sub="audit trail" />
         <Stat label="Database" value={`${(size / 1024).toFixed(0)} KB`} sub={`SQLite 3 · schema v${info.schema_version ?? "?"}`} />
         <Stat label="You" value={personName(user.id) || user.name} sub={user.canApprove ? "can approve & edit catalog" : "can model, not approve"} />
-        <Stat label="Mode" value={shared ? `Shared · ${shared.status}` : "This browser"} sub={shared ? shared.name : "kept in this browser, save to your account"} />
+        <Stat label="Mode" value={shared ? `Shared · ${shared.status}` : desktop ? "This computer" : "This browser"} sub={shared ? shared.name : desktop ? (plantFile?.path ?? "not saved to a file yet") : "kept in this browser, save to your account"} />
       </div>
 
       <div className="dbm-section">

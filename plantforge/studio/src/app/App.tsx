@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
-import { deleteObject } from "../engine/commands";
 import { demoDoc } from "../engine/demo";
 import { dbHub, installDatabaseSync, restoreOrCreate, schedulePersist } from "../db/service";
+import { desktop } from "../platform/desktop";
+import { installDesktop, saveToFile, startDesktop } from "./desktopShell";
 import { installSharedSync, joinShared } from "../db/shared";
 import { cloud, currentUser, loadDraft, sampleFn } from "../platform/claude";
 import { DatabaseManager } from "./DatabaseManager";
 import { Assistant } from "./Assistant";
 import { CommandBar, Help, IsoView, Projects, StatusBar, Toasts, TopBar } from "./Chrome";
 import { Explorer } from "./Explorer";
-import { hub } from "./hub";
+import { deleteFocused, hub } from "./hub";
 import { Ribbon } from "./Ribbon";
 import { SidePanel } from "./SidePanel";
 import { useStore } from "./store";
@@ -38,8 +39,18 @@ export function App() {
       installSharedSync();
       const st = useStore.getState();
       st.set({ user: await currentUser() });
-      const draft = loadDraft(); // documents saved by earlier versions (localStorage)
-      const { sharedPid } = await restoreOrCreate(() => draft?.doc ?? demoDoc());
+      let sharedPid: string | null = null;
+      if (desktop) {
+        // the desktop program: plant database files on this computer
+        try {
+          await startDesktop();
+        } finally {
+          installDesktop();
+        }
+      } else {
+        const draft = loadDraft(); // documents saved by earlier versions (localStorage)
+        sharedPid = (await restoreOrCreate(() => draft?.doc ?? demoDoc())).sharedPid;
+      }
       performance.mark("plantforge:db-ready");
       if (sharedPid) {
         // back into the shared plant this browser was working on, with everyone's latest changes
@@ -59,6 +70,7 @@ export function App() {
     const st = useStore.getState();
     const db = dbHub.db;
     if (!db) return;
+    if (desktop) return void (await saveToFile());
     if (st.shared) {
       st.set({ dirty: false });
       st.toast(st.shared.status === "readonly" ? "This shared plant is view only for you." : "Shared plant: every change is saved for everyone as you work.", "info");
@@ -108,12 +120,7 @@ export function App() {
         if (st.tool !== "select") return st.setTool("select");
         return st.select([], null);
       }
-      if (ev.key === "Delete" && st.focus) {
-        const f = st.focus;
-        const label = f.type === "equipment" ? st.doc.equipment.find((e) => e.id === f.id)?.tag : f.type === "line" ? st.doc.lines.find((l) => l.id === f.id)?.number : st.doc.structures.find((x) => x.id === f.id)?.tag;
-        st.apply(deleteObject(st.doc, f), `Delete ${label}`);
-        return st.select([], null);
-      }
+      if (ev.key === "Delete" && st.focus) return void deleteFocused();
       if (ev.key.toLowerCase() === "f" && !mod) return hub.viewer?.fit();
     };
     window.addEventListener("keydown", onKey);

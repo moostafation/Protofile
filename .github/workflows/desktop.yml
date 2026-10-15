@@ -1,0 +1,95 @@
+# PlantForge Studio desktop: builds the Windows installer (and a portable .exe) on Windows, and the
+# Linux AppImage/.deb on Linux, every time the Studio or the desktop program changes.
+# The files are attached to each run under "Artifacts". Pushing a tag like desktop-v0.3.0 also
+# publishes them as a GitHub release.
+
+name: Desktop app
+
+on:
+  push:
+    paths:
+      - "plantforge/studio/**"
+      - "plantforge/desktop/**"
+      - "plantforge/plantforge/data/**"
+      - "plantforge/plantforge/specs/**"
+      - ".github/workflows/desktop.yml"
+    tags:
+      - "desktop-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            target: --win
+            files: |
+              plantforge/desktop/dist/*.exe
+          - name: Linux
+            os: ubuntu-latest
+            target: --linux
+            files: |
+              plantforge/desktop/dist/*.AppImage
+              plantforge/desktop/dist/*.deb
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            plantforge/studio/package-lock.json
+            plantforge/desktop/package-lock.json
+
+      - name: Studio - install
+        working-directory: plantforge/studio
+        run: npm ci
+
+      - name: Studio - test
+        if: runner.os == 'Linux'
+        working-directory: plantforge/studio
+        run: npm test
+
+      - name: Studio - build the desktop page
+        working-directory: plantforge/studio
+        run: npm run build:desktop
+
+      - name: Desktop - install
+        working-directory: plantforge/desktop
+        run: npm ci
+
+      - name: Desktop - package
+        working-directory: plantforge/desktop
+        run: npx electron-builder ${{ matrix.target }} --publish never
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PlantForge-Studio-${{ matrix.name }}
+          path: ${{ matrix.files }}
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/desktop-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" out/* --repo "$GITHUB_REPOSITORY" --title "PlantForge Studio ${GITHUB_REF_NAME#desktop-v}" --notes "Desktop edition. Windows - PlantForge-Studio-*-Setup.exe (installer) or *-Portable.exe (no install). Linux - .AppImage or .deb."

@@ -7,6 +7,8 @@ import { toSvg } from "../engine/drawing";
 import { lineIsometric } from "../engine/iso";
 import { linePcf } from "../engine/pcf";
 import { Cloud, ProjectMeta, canDownload, cloud, inClaude } from "../platform/claude";
+import { desktop } from "../platform/desktop";
+import { confirmDiscard, openPath, openWithDialog, saveToFile } from "./desktopShell";
 import type { DbState } from "../db/PlantDB";
 import { newDatabase, openState } from "../db/service";
 import { SharedPlantMeta, deleteShared, joinShared, leaveShared, listShared, shareCurrent, sharedAvailable } from "../db/shared";
@@ -60,9 +62,9 @@ export function TopBar({ assistantAvailable, projectId, onSave }: { assistantAva
           {hard ? `${hard} clash${hard > 1 ? "es" : ""}` : "Clash-free"}
         </span>
         {errors > 0 && <span className="pill crit">{errors} to fix</span>}
-        <button type="button" id="db-pill" className={`db-pill${s.shared ? ` ${s.shared.status}` : ""}`} onClick={() => s.set({ dbOpen: true, dbPage: "overview" })} title={s.shared ? `Shared plant database "${s.shared.name}" (${s.shared.status})` : "Plant database kept in this browser"}>
+        <button type="button" id="db-pill" className={`db-pill${s.shared ? ` ${s.shared.status}` : ""}`} onClick={() => s.set({ dbOpen: true, dbPage: "overview" })} title={s.shared ? `Shared plant database "${s.shared.name}" (${s.shared.status})` : desktop ? (s.file?.path ?? "Not saved to a file yet") : "Plant database kept in this browser"}>
           <Icon name="database" size={14} />
-          <span>{s.shared ? (s.shared.status === "live" ? "Shared · live" : `Shared · ${s.shared.status}`) : "Local DB"}</span>
+          <span>{s.shared ? (s.shared.status === "live" ? "Shared · live" : `Shared · ${s.shared.status}`) : desktop ? (s.file?.name ?? "Unsaved plant") : "Local DB"}</span>
           <span className="db-user">
             <Icon name="user" size={13} /> {s.user.name}
             {s.user.canApprove ? "" : " · no approve"}
@@ -71,7 +73,7 @@ export function TopBar({ assistantAvailable, projectId, onSave }: { assistantAva
       </div>
       <div className="tb-actions">
         <button type="button" className="btn ghost" onClick={() => s.set({ projectsOpen: true })}>
-          <Icon name="folder" size={15} /> <span>Projects</span>
+          <Icon name="folder" size={15} /> <span>{desktop ? "Files" : "Projects"}</span>
         </button>
         <button type="button" className="btn ghost icon-only" onClick={() => s.set({ helpOpen: true })} aria-label="Help">
           <Icon name="help" size={16} />
@@ -223,6 +225,8 @@ export function StatusBar() {
   const tool = useStore((s) => s.tool);
   const model = useStore((s) => s.model);
   const shared = useStore((s) => s.shared);
+  const file = useStore((s) => s.file);
+  const dirty = useStore((s) => s.dirty);
   const user = useStore((s) => s.user);
   const cursor = useStatus((s) => s.cursor);
   const view = useStatus((s) => s.view);
@@ -248,7 +252,9 @@ export function StatusBar() {
       <span className="sb-cell">mm</span>
       <span className={`sb-cell ${hard ? "crit-text" : ""}`}>{hard ? `${hard} hard clash${hard > 1 ? "es" : ""}` : "No clashes"}</span>
       <span className="sb-cell">{model.equipment.size} EQUI · {model.lines.size} PIPE</span>
-      <span className="sb-cell">{shared ? `Shared: ${shared.name} (${shared.status})` : "Local database"}</span>
+      <span className="sb-cell" title={file?.path}>
+        {shared ? `Shared: ${shared.name} (${shared.status})` : desktop ? `${file ? file.name : "Not saved to a file"}${dirty ? " · modified" : ""}` : "Local database"}
+      </span>
       <span className="sb-cell">{user.name}</span>
     </div>
   );
@@ -425,6 +431,7 @@ export function Projects({ projectId, setProjectId, onSave }: { projectId: strin
     s.toast(label);
   };
   const open = async (doc: PlantDoc, id: string | null, label: string) => {
+    if (!(await confirmDiscard("opening another plant"))) return;
     await newDatabase(doc, label, id);
     finish(id, label);
   };
@@ -433,7 +440,7 @@ export function Projects({ projectId, setProjectId, onSave }: { projectId: strin
     finish(id, label);
   };
   return (
-    <Modal title="Projects" onClose={() => s.set({ projectsOpen: false })}>
+    <Modal title={desktop ? "Plant files" : "Projects"} onClose={() => s.set({ projectsOpen: false })}>
       <div className="projects">
         <div className="proj-actions">
           <button type="button" className="btn" onClick={() => open({ ...emptyDoc(), project: { name: "New plant", plant: "", area: "A-100", unit: "U-100" } }, null, "Started a new plant")}>
@@ -464,10 +471,10 @@ export function Projects({ projectId, setProjectId, onSave }: { projectId: strin
             }}
           />
         </div>
-        <SharedPlants onDone={(label) => finish(null, label)} />
-        <h3>Saved in your account (private)</h3>
-        {c === undefined && <p className="muted">Checking…</p>}
-        {c === null && (
+        {desktop ? <DesktopFiles onDone={() => s.set({ projectsOpen: false })} /> : <SharedPlants onDone={(label) => finish(null, label)} />}
+        {!desktop && <h3>Saved in your account (private)</h3>}
+        {!desktop && c === undefined && <p className="muted">Checking…</p>}
+        {!desktop && c === null && (
           <p className="muted">
             {inClaude() ? "Saving to your account needs you to be signed in to Claude." : "Saving to your account works when this page is opened in Claude."} Your latest work is also kept in this browser.
           </p>
@@ -537,6 +544,57 @@ export function Projects({ projectId, setProjectId, onSave }: { projectId: strin
         )}
       </div>
     </Modal>
+  );
+}
+
+// ------------------------------------------------------------------ plant files on this computer (desktop program)
+function DesktopFiles({ onDone }: { onDone: () => void }) {
+  const file = useStore((s) => s.file);
+  const dirty = useStore((s) => s.dirty);
+  const [recent, setRecent] = useState<string[]>([]);
+  useEffect(() => {
+    desktop?.info().then((i) => setRecent(i.recent));
+  }, [file]);
+  const base = (p: string) => p.split(/[\\/]/).pop() ?? p;
+  return (
+    <section className="shared-sec" aria-label="Plant files on this computer">
+      <h3>Plant files on this computer</h3>
+      <p className="muted small">
+        A plant is one database file (.pfdb, standard SQLite 3): catalog, specs, model, approvals and the audit trail. Keep it in a project folder or on a shared drive and back it up like any document.
+      </p>
+      <p className="mono small">{file ? `${file.path}${dirty ? "  (unsaved changes)" : ""}` : "This plant is not saved to a file yet."}</p>
+      <div className="proj-actions">
+        <button type="button" className="btn" onClick={async () => (await openWithDialog(), onDone())}>
+          <Icon name="folder" size={15} /> Open…
+        </button>
+        <button type="button" className="btn accent" onClick={() => void saveToFile()}>
+          <Icon name="save" size={15} /> Save
+        </button>
+        <button type="button" className="btn" onClick={() => void saveToFile(true)}>
+          <Icon name="save" size={15} /> Save as…
+        </button>
+        {file && (
+          <button type="button" className="btn" onClick={() => desktop?.showInFolder(file.path)}>
+            <Icon name="folder" size={15} /> Show in folder
+          </button>
+        )}
+      </div>
+      <h3>Recent</h3>
+      {recent.length === 0 ? (
+        <p className="muted">No recent files.</p>
+      ) : (
+        <ul className="proj-list">
+          {recent.map((p) => (
+            <li key={p} className={p === file?.path ? "on" : ""}>
+              <button type="button" className="proj-open" onClick={async () => (await openPath(p), onDone())}>
+                <span className="mono">{base(p)}</span>
+                <span className="muted">{p}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 

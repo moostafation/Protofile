@@ -1,0 +1,110 @@
+{
+  "name": "plantforge-studio-desktop",
+  "productName": "PlantForge Studio",
+  "version": "0.3.0",
+  "description": "PlantForge Studio - 3D plant & piping design, desktop edition",
+  "author": "PlantForge",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/moostafation/protofile.git"
+  },
+  "homepage": "https://github.com/moostafation/protofile/tree/main/plantforge",
+  "private": true,
+  "main": "main.cjs",
+  "desktopName": "plantforge-studio.desktop",
+  "scripts": {
+    "app": "npm --prefix ../studio run build:desktop",
+    "start": "electron .",
+    "dev": "npm run app && electron .",
+    "dist:win": "npm run app && electron-builder --win --publish never",
+    "dist:linux": "npm run app && electron-builder --linux --publish never",
+    "dist:mac": "npm run app && electron-builder --mac --publish never",
+    "pack": "electron-builder --dir --publish never"
+  },
+  "devDependencies": {
+    "electron": "44.5.1",
+    "electron-builder": "26.16.1"
+  },
+  "build": {
+    "appId": "com.plantforge.studio",
+    "productName": "PlantForge Studio",
+    "copyright": "PlantForge contributors",
+    "artifactName": "PlantForge-Studio-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "app/**",
+      "build/icon.png",
+      "package.json"
+    ],
+    "asar": true,
+    "fileAssociations": [
+      {
+        "ext": "pfdb",
+        "name": "PlantForge plant database",
+        "description": "PlantForge plant database (SQLite)",
+        "role": "Editor",
+        "icon": "build/icon.ico",
+        "mimeType": "application/x-plantforge-db"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "PlantForge Studio",
+      "artifactName": "PlantForge-Studio-${version}-Setup.${ext}"
+    },
+    "portable": {
+      "artifactName": "PlantForge-Studio-${version}-Portable.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Engineering",
+      "icon": "build/icon.png",
+      "maintainer": "PlantForge <noreply@plantforge.dev>",
+      "synopsis": "3D plant & piping design",
+      "syncDesktopName": true
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.png"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "moostafation",
+      "repo": "protofile",
+      "releaseType": "draft"
+    }
+  }
+}

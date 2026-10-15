@@ -115,6 +115,7 @@ flowchart TB
 - **قاعدة البيانات:** SQLite زي SP3D، و Approval، و Transactions، و Shared plant لايف.
 - **الشكل:** 3D وواجهة Desktop.
 - **لغة أوامر خاصة بالبرنامج:** إنجليزي وعربي، ومعاها اقتراحات وانت بتكتب ([docs/COMMANDS.md](COMMANDS.md)).
+- **نسخة Desktop:** Installer لـ Windows، وملف `.pfdb` (SQLite) على الجهاز، وشغل Offline ([DESKTOP.md](DESKTOP.md)).
 
 ## 5.2 المرحلة الجاية: نبني على اللي وصلناله
 
@@ -127,7 +128,7 @@ flowchart TB
 | 5 | **Supports:** Guides و Anchors و Hangers و Trunnions، وفحص الـ Span تلقائي | الدعامات جزء كبير من شغل البايبنج |
 | 6 | **معدات أكتر:** Air cooler، و Compressor، و Fired heater، وعمود بـ Trays، وحديد Platforms بالأوامر | وحدات كاملة |
 | 7 | **Stress:** تصدير لـ CAESAR II (Neutral file) | دورة التصميم كاملة |
-| 8 | **Desktop app:** Tauri أو Electron، وملف SQLite على الجهاز، وشغل Offline | للي عايز برنامج يتسطب |
+| 8 | ~~**Desktop app:** Tauri أو Electron، وملف SQLite على الجهاز، وشغل Offline~~ **اتعمل:** Electron، وملف `.pfdb`، و Installer لـ Windows ([DESKTOP.md](DESKTOP.md)) | للي عايز برنامج يتسطب |
 
 ## 6. الخطوات الجاية مباشرة (المرحلة 1)
 

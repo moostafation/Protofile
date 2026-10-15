@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b4470"/>
+      <stop offset="1" stop-color="#121d33"/>
+    </linearGradient>
+    <linearGradient id="pipe" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffb35c"/>
+      <stop offset="1" stop-color="#e0661b"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="480" height="480" rx="96" fill="url(#bg)"/>
+  <rect x="16" y="16" width="480" height="480" rx="96" fill="none" stroke="#4d6ea6" stroke-width="6" opacity=".6"/>
+  <!-- grid -->
+  <g stroke="#3a5687" stroke-width="3" opacity=".55">
+    <path d="M96 112h320M96 192h320M96 272h320M96 352h320M96 432h320"/>
+  </g>
+  <!-- a pipe route: nozzle, down, elbow, along, elbow, up to a flange -->
+  <path d="M120 400 V250 H272 V128 H392" fill="none" stroke="url(#pipe)" stroke-width="44" stroke-linecap="butt" stroke-linejoin="round"/>
+  <path d="M120 400 V250 H272 V128 H392" fill="none" stroke="#fff" stroke-opacity=".28" stroke-width="10" stroke-linejoin="round" transform="translate(-9,-9)"/>
+  <!-- flanges -->
+  <rect x="384" y="94" width="26" height="68" rx="5" fill="#dfe7f3"/>
+  <rect x="86" y="392" width="68" height="26" rx="5" fill="#dfe7f3"/>
+  <!-- valve on the horizontal run -->
+  <path d="M176 222 L216 250 L176 278 Z M256 222 L216 250 L256 278 Z" fill="#dfe7f3"/>
+  <rect x="210" y="196" width="12" height="40" fill="#dfe7f3"/>
+  <rect x="190" y="186" width="52" height="12" rx="6" fill="#dfe7f3"/>
+</svg>

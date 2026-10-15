@@ -3,6 +3,7 @@
 import type { PlantDoc } from "../engine/doc";
 import type { User } from "../engine/meta";
 import type { DbState } from "../db/PlantDB";
+import { desktop } from "./desktop";
 import { rememberPerson } from "./people";
 
 type AnyCap = any; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -22,6 +23,15 @@ export type SaveOutcome = "saved" | "declined" | "unavailable";
 
 /** Offer a file to the viewer: the platform's download prompt inside claude.ai, a normal download elsewhere. */
 export async function saveFile(filename: string, data: string | Blob): Promise<SaveOutcome> {
+  if (desktop) {
+    // the desktop program: a native Save dialog
+    try {
+      const r = await desktop.exportFile({ filename, data: typeof data === "string" ? data : new Uint8Array(await data.arrayBuffer()) });
+      return r ? "saved" : "declined";
+    } catch {
+      return "unavailable";
+    }
+  }
   const dl = await cap("downloads");
   if (dl) {
     try {
@@ -137,6 +147,13 @@ export async function sampleFn(): Promise<AnyCap | null> {
 
 /** Who is working: the signed-in Claude user (editors may approve), or a local user outside Claude. */
 export async function currentUser(): Promise<User> {
+  if (desktop) {
+    // the desktop program: whoever is signed in to this computer
+    const name = (await desktop.info().catch(() => null))?.user || "Local user";
+    const user = { id: name.toLowerCase(), name, canApprove: true };
+    rememberPerson(user.id, user.name);
+    return user;
+  }
   const u = await cap("user");
   if (!u) return { id: "local", name: "Local user", canApprove: true };
   try {

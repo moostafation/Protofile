@@ -9,6 +9,7 @@ import { exportCurrent } from "./exporters";
 import { hub } from "./hub";
 import { Icon } from "./icons";
 import { ToolId, useStore } from "./store";
+import { desktop } from "../platform/desktop";
 
 type Tab = "home" | "equipment" | "piping" | "structure" | "review" | "database" | "drawings";
 
@@ -77,7 +78,7 @@ export function Ribbon() {
   return (
     <nav className="ribbon" aria-label="Tools">
       <div className="rb-tabs" role="tablist">
-        <button type="button" className="rb-file" onClick={() => s.set({ projectsOpen: true })} title="Projects: new, open, save, shared plants">
+        <button type="button" className="rb-file" onClick={() => s.set({ projectsOpen: true })} title={desktop ? "Plant files: new, open, save, recent" : "Projects: new, open, save, shared plants"}>
           FILE
         </button>
         {TABS.map(([id, label]) => (
@@ -223,9 +224,11 @@ export function Ribbon() {
               <Btn id="approve-sel" icon="tick" label="Approve" disabled={!owners.length || !s.user.canApprove} onClick={() => setStatus("Approved")} title={s.user.canApprove ? "Approve the selected objects (locks them)" : "Only editors can approve"} />
               <Btn icon="undo" label="Back to Working" disabled={!owners.length} onClick={() => setStatus("Working")} />
             </Group>
-            <Group title="Workshare" tone="data">
-              <Btn id="shared-open" icon="user" label={s.shared ? "Shared plant" : "Share plant"} active={!!s.shared} onClick={() => s.set({ projectsOpen: true })} title="Work on one plant with your team, live" />
-            </Group>
+            {!desktop && (
+              <Group title="Workshare" tone="data">
+                <Btn id="shared-open" icon="user" label={s.shared ? "Shared plant" : "Share plant"} active={!!s.shared} onClick={() => s.set({ projectsOpen: true })} title="Work on one plant with your team, live" />
+              </Group>
+            )}
           </>
         )}
         {tab === "drawings" && (

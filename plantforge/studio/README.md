@@ -3,6 +3,7 @@
 **برنامج تصميم مصانع وأنابيب تفاعلي ثلاثي الأبعاد، شغّال في المتصفح، على طريقة SP3D و E3D.**
 
 ملف واحد (`release/plantforge-studio.html`). افتحه في أي متصفح حديث، ومحتاج إنترنت بس عشان الخطوط.
+وفيه كمان **نسخة Desktop** بتتسطب على Windows و Linux، وبتشتغل Offline، وكل مصنع فيها ملف `.pfdb` على جهازك ([docs/DESKTOP.md](../docs/DESKTOP.md)).
 وفيه [قاعدة بيانات للمصنع زي SP3D](#قاعدة-البيانات-plant-database-زي-sp3d): كتالوج، و Approval، و Transactions، و SQL، وشغل جماعي لايف.
 
 ![](../docs/img/studio.png)
@@ -120,6 +121,17 @@ npm run dev        # تطوير على http://localhost:5173
 npm test           # 39 اختبار للمحرك وقاعدة البيانات ولغة الأوامر
 npm run build      # dist/plantforge-studio.html (ملف واحد) + dist/artifact.html
 ```
+
+## نسخة Desktop
+
+```bash
+cd plantforge/desktop
+npm install
+npm run dev        # يبني الواجهة (npm run build:desktop) ويفتح البرنامج في Electron
+npm run dist:win   # Installer و Portable لـ Windows
+```
+
+التفاصيل في [docs/DESKTOP.md](../docs/DESKTOP.md).
 
 ## المعمارية
 

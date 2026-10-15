@@ -13,7 +13,24 @@ import { DbState, PlantDB } from "./PlantDB";
 
 const IDB_KEY = "plant-db";
 
-export const dbHub: { db: PlantDB | null; projectId: string | null; sharedPid: string | null } = { db: null, projectId: null, sharedPid: null };
+/** The plant database file on this computer (desktop program). */
+export interface PlantFile {
+  path: string;
+  name: string;
+}
+
+export const dbHub: { db: PlantDB | null; projectId: string | null; sharedPid: string | null; file: PlantFile | null } = { db: null, projectId: null, sharedPid: null, file: null };
+
+/** What is kept between visits: the database file itself, and where it came from. */
+export interface WorkingCopy {
+  bytes: Uint8Array;
+  projectId: string | null;
+  sharedPid?: string | null;
+  file?: PlantFile | null;
+  /** Changes not yet saved to `file`. */
+  dirty?: boolean;
+  at: number;
+}
 
 /** Hooks for the shared plant: catalog edits made here are pushed to everyone. */
 export const dbEvents: { catalog: ((action: string) => void) | null; leave: (() => void) | null } = { catalog: null, leave: null };
@@ -44,9 +61,23 @@ function scheduleRefresh() {
 
 export function schedulePersist() {
   clearTimeout(persistTimer);
-  persistTimer = window.setTimeout(() => {
-    if (dbHub.db) idbSet(IDB_KEY, { bytes: dbHub.db.export(), projectId: dbHub.projectId, sharedPid: dbHub.sharedPid, at: Date.now() });
-  }, 1200);
+  persistTimer = window.setTimeout(() => void persistNow(), 1200);
+}
+
+/** Keep the working copy now (before the desktop window closes, after saving to a file). */
+export async function persistNow(): Promise<void> {
+  clearTimeout(persistTimer);
+  if (!dbHub.db) return;
+  const copy: WorkingCopy = { bytes: dbHub.db.export(), projectId: dbHub.projectId, sharedPid: dbHub.sharedPid, file: dbHub.file, dirty: S().dirty, at: Date.now() };
+  await idbSet(IDB_KEY, copy);
+}
+
+export const readWorkingCopy = () => idbGet<WorkingCopy>(IDB_KEY);
+
+/** Drop the working copy (the user chose not to keep unsaved changes). */
+export async function forgetWorkingCopy(): Promise<void> {
+  clearTimeout(persistTimer);
+  await idbSet(IDB_KEY, null);
 }
 
 /** Route committed transactions into the database. Installed once at start-up. */
@@ -60,12 +91,14 @@ export function installDatabaseSync() {
   });
 }
 
-function activate(db: PlantDB, label: string, projectId: string | null, sharedPid: string | null = null) {
+function activate(db: PlantDB, label: string, projectId: string | null, sharedPid: string | null = null, file: PlantFile | null = null) {
   if (!sharedPid) dbEvents.leave?.(); // opening anything else ends work on the shared plant
   dbHub.db?.close();
   dbHub.db = db;
   dbHub.projectId = projectId;
   dbHub.sharedPid = sharedPid;
+  dbHub.file = file;
+  S().set({ file });
   setCatalogData(db.readCatalog());
   setSpecs(db.readSpecs());
   suppress = true;
@@ -93,8 +126,9 @@ export async function openState(state: DbState | { doc: PlantDoc }, label: strin
   activate(await PlantDB.fromState(full), label, projectId);
 }
 
-export async function openBytes(bytes: Uint8Array, label: string) {
-  activate(await PlantDB.open(bytes), label, null);
+/** A plant database file; `file` is where it lives on this computer (desktop), so Save writes back to it. */
+export async function openBytes(bytes: Uint8Array, label: string, file: PlantFile | null = null) {
+  activate(await PlantDB.open(bytes), label, null, null, file);
 }
 
 /** A local copy of a shared plant: its document, catalog and the shared transaction log. */
@@ -141,6 +175,7 @@ export function catalogChanged(action: string): string[] {
   setSpecs(db.readSpecs());
   db.logTxn(action, S().user.id);
   S().recompute();
+  S().set({ dirty: true });
   scheduleRefresh();
   schedulePersist();
   dbEvents.catalog?.(action);
