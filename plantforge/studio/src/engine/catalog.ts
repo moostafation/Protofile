@@ -73,7 +73,8 @@ export interface FlangeData {
 }
 
 export type PipeRow = { dn: number; od: number; wall: Record<string, number> };
-export type FitRow = { elbow90_lr: number; elbow45_lr: number; tee: number };
+/** B16.9 butt-weld fittings: centre-to-end of elbows and tees, end-to-end of reducers (by the larger size). */
+export type FitRow = { elbow90_lr: number; elbow45_lr: number; tee: number; reducer?: number };
 export type FlRow = { o: number; tf: number; y: number; rf_dia: number; hub_dia: number; bc: number; bolts: number; bolt_dia: string };
 
 /** The whole dimensional catalog. Standard tables ship with the program; a plant database may replace them. */
@@ -126,6 +127,11 @@ export const catalog = {
   elbow90: (nps: string) => row(active.fittings, nps, "90deg LR elbow").elbow90_lr,
   elbow45: (nps: string) => row(active.fittings, nps, "45deg LR elbow").elbow45_lr,
   tee: (nps: string) => row(active.fittings, nps, "equal tee").tee,
+  reducer(nps: string): number {
+    const h = row(active.fittings, nps, "reducer").reducer;
+    if (h === undefined) throw new CatalogError(`reducer: no catalog length for NPS ${normalizeNps(nps)}`);
+    return h;
+  },
   flange(nps: string, rating: string): FlangeData {
     const t = active.flanges[rating];
     if (!t) throw new CatalogError(`no flange data for rating ${rating}`);

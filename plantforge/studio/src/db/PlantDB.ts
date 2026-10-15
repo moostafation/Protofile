@@ -43,6 +43,14 @@ const fromIso = (s: string | null) => (s ? Date.parse(s.replace(" ", "T") + "Z")
 
 export class DbError extends Error {}
 
+/** Databases from before reducers: add the B16.9 reducer length column, filled from the standard tables. */
+function upgradeFittings(db: Database) {
+  const cols = db.exec("PRAGMA table_info(cat_fitting)")[0]?.values.map((v) => String(v[1])) ?? [];
+  if (!cols.length || cols.includes("reducer")) return;
+  db.run("ALTER TABLE cat_fitting ADD COLUMN reducer REAL");
+  for (const [nps, r] of Object.entries(standardCatalogData().fittings)) if (r.reducer !== undefined) db.run("UPDATE cat_fitting SET reducer = ? WHERE nps = ?", [r.reducer, nps]);
+}
+
 export class PlantDB {
   private saved = new Map<string, string>(); // oid -> data JSON last written
 
@@ -83,6 +91,7 @@ export class PlantDB {
     }
     db.run("PRAGMA foreign_keys = ON");
     db.run("CREATE TABLE IF NOT EXISTS person (id TEXT PRIMARY KEY, name TEXT)");
+    upgradeFittings(db);
     const p = new PlantDB(db);
     for (const { obj } of objects(p.readDoc())) p.saved.set(obj.id, JSON.stringify(obj));
     return p;
@@ -132,7 +141,7 @@ export class PlantDB {
         this.db.run("INSERT INTO cat_pipe VALUES (?, ?, ?)", [nps, r.dn, r.od]);
         for (const [sch, w] of Object.entries(r.wall)) this.db.run("INSERT INTO cat_pipe_wall VALUES (?, ?, ?)", [nps, sch, w]);
       }
-      for (const [nps, r] of Object.entries(c.fittings)) this.db.run("INSERT INTO cat_fitting VALUES (?, ?, ?, ?)", [nps, r.elbow90_lr, r.elbow45_lr, r.tee]);
+      for (const [nps, r] of Object.entries(c.fittings)) this.db.run("INSERT INTO cat_fitting VALUES (?, ?, ?, ?, ?)", [nps, r.elbow90_lr, r.elbow45_lr, r.tee, r.reducer ?? null]);
       for (const [rating, t] of Object.entries(c.flanges)) {
         this.db.run("INSERT INTO cat_flange_rating VALUES (?, ?)", [rating, t.rf_height]);
         for (const [nps, r] of Object.entries(t.sizes))
@@ -147,8 +156,8 @@ export class PlantDB {
     const c: CatalogData = { pipe: {}, fittings: {}, flanges: {}, valves: {} };
     for (const r of this.rows<{ nps: string; dn: number; od: number }>("SELECT * FROM cat_pipe")) c.pipe[r.nps] = { dn: r.dn, od: r.od, wall: {} };
     for (const r of this.rows<{ nps: string; schedule: string; wall: number }>("SELECT * FROM cat_pipe_wall")) if (c.pipe[r.nps]) c.pipe[r.nps].wall[r.schedule] = r.wall;
-    for (const r of this.rows<{ nps: string; elbow90_lr: number; elbow45_lr: number; tee: number }>("SELECT * FROM cat_fitting"))
-      c.fittings[r.nps] = { elbow90_lr: r.elbow90_lr, elbow45_lr: r.elbow45_lr, tee: r.tee };
+    for (const r of this.rows<{ nps: string; elbow90_lr: number; elbow45_lr: number; tee: number; reducer: number | null }>("SELECT * FROM cat_fitting"))
+      c.fittings[r.nps] = { elbow90_lr: r.elbow90_lr, elbow45_lr: r.elbow45_lr, tee: r.tee, ...(r.reducer != null ? { reducer: r.reducer } : {}) };
     for (const r of this.rows<{ rating: string; rf_height: number }>("SELECT * FROM cat_flange_rating")) c.flanges[r.rating] = { rf_height: r.rf_height, sizes: {} };
     for (const r of this.rows<Record<string, SqlValue>>("SELECT * FROM cat_flange")) {
       const t = c.flanges[String(r.rating)];

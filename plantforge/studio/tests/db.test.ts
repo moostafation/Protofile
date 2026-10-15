@@ -7,6 +7,7 @@ import { ApprovalError, LOCAL_USER, normalizeDoc, setMeta, stamp } from "../src/
 import { setSpecs, standardSpecs } from "../src/engine/spec";
 import { PlantDB, parseCsv } from "../src/db/PlantDB";
 import { REPORTS } from "../src/db/schema";
+import initSqlJs from "sql.js/dist/sql-asm-memory-growth.js";
 
 const demo = normalizeDoc(demoDoc());
 
@@ -27,6 +28,18 @@ describe("plant database", () => {
     const specs = db.readSpecs();
     expect(specs.A1A.pipeRules).toEqual(standardSpecs().A1A.pipeRules);
     expect(specs.A1A.valves).toEqual(standardSpecs().A1A.valves);
+  });
+
+  it("upgrades a database saved before reducers (B16.9 reducer lengths)", async () => {
+    const SQL = await initSqlJs();
+    const raw = new SQL.Database((await PlantDB.create(demo)).export());
+    raw.run("ALTER TABLE cat_fitting DROP COLUMN reducer");
+    const old = await PlantDB.open(raw.export());
+    const fit = old.readCatalog().fittings;
+    expect(fit["4"].reducer).toBe(102);
+    expect(fit["12"].reducer).toBe(203);
+    setCatalogData(old.readCatalog());
+    expect(catalog.reducer("6")).toBe(140);
   });
 
   it("refreshes report tables and runs every saved report", async () => {

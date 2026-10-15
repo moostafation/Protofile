@@ -34,6 +34,14 @@ skey = "ELBW"
 description = "TEE EQUAL, BW, ASTM A234 WPB, ASME B16.9"
 skey = "TEBW"
 
+[reducer_conc]
+description = "REDUCER CONCENTRIC, BW, ASTM A234 WPB, ASME B16.9"
+skey = "RCBW"
+
+[reducer_ecc]
+description = "REDUCER ECCENTRIC, BW, ASTM A234 WPB, ASME B16.9"
+skey = "REBW"
+
 [flange]
 description = "FLANGE WN RF CL150, ASTM A105, ASME B16.5"
 skey = "FLWN"

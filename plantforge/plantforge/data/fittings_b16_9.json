@@ -1,21 +1,21 @@
 {
-  "_source": "ASME B16.9 butt-welding fittings, centre-to-end dimensions (mm). elbow90_lr = A, elbow45_lr = B, tee = C (run) = M (branch, equal tee). Development data compiled for PlantForge - verify against your licensed copy of the standard before production use.",
+  "_source": "ASME B16.9 butt-welding fittings, centre-to-end dimensions (mm). elbow90_lr = A, elbow45_lr = B, tee = C (run) = M (branch, equal tee). reducer = H, end-to-end length of a concentric or eccentric reducer, by its larger size. Development data compiled for PlantForge - verify against your licensed copy of the standard before production use.",
   "sizes": {
-    "1/2":   {"elbow90_lr": 38,  "elbow45_lr": 16,  "tee": 25},
-    "3/4":   {"elbow90_lr": 29,  "elbow45_lr": 11,  "tee": 29},
-    "1":     {"elbow90_lr": 38,  "elbow45_lr": 22,  "tee": 38},
-    "1-1/2": {"elbow90_lr": 57,  "elbow45_lr": 29,  "tee": 57},
-    "2":     {"elbow90_lr": 76,  "elbow45_lr": 35,  "tee": 64},
-    "3":     {"elbow90_lr": 114, "elbow45_lr": 51,  "tee": 86},
-    "4":     {"elbow90_lr": 152, "elbow45_lr": 64,  "tee": 105},
-    "6":     {"elbow90_lr": 229, "elbow45_lr": 95,  "tee": 143},
-    "8":     {"elbow90_lr": 305, "elbow45_lr": 127, "tee": 178},
-    "10":    {"elbow90_lr": 381, "elbow45_lr": 159, "tee": 216},
-    "12":    {"elbow90_lr": 457, "elbow45_lr": 190, "tee": 254},
-    "14":    {"elbow90_lr": 533, "elbow45_lr": 222, "tee": 279},
-    "16":    {"elbow90_lr": 610, "elbow45_lr": 254, "tee": 305},
-    "18":    {"elbow90_lr": 686, "elbow45_lr": 286, "tee": 343},
-    "20":    {"elbow90_lr": 762, "elbow45_lr": 318, "tee": 381},
-    "24":    {"elbow90_lr": 914, "elbow45_lr": 381, "tee": 432}
+    "1/2":   {"elbow90_lr": 38,  "elbow45_lr": 16,  "tee": 25, "reducer": 38},
+    "3/4":   {"elbow90_lr": 29,  "elbow45_lr": 11,  "tee": 29, "reducer": 38},
+    "1":     {"elbow90_lr": 38,  "elbow45_lr": 22,  "tee": 38, "reducer": 51},
+    "1-1/2": {"elbow90_lr": 57,  "elbow45_lr": 29,  "tee": 57, "reducer": 64},
+    "2":     {"elbow90_lr": 76,  "elbow45_lr": 35,  "tee": 64, "reducer": 76},
+    "3":     {"elbow90_lr": 114, "elbow45_lr": 51,  "tee": 86, "reducer": 89},
+    "4":     {"elbow90_lr": 152, "elbow45_lr": 64,  "tee": 105, "reducer": 102},
+    "6":     {"elbow90_lr": 229, "elbow45_lr": 95,  "tee": 143, "reducer": 140},
+    "8":     {"elbow90_lr": 305, "elbow45_lr": 127, "tee": 178, "reducer": 152},
+    "10":    {"elbow90_lr": 381, "elbow45_lr": 159, "tee": 216, "reducer": 178},
+    "12":    {"elbow90_lr": 457, "elbow45_lr": 190, "tee": 254, "reducer": 203},
+    "14":    {"elbow90_lr": 533, "elbow45_lr": 222, "tee": 279, "reducer": 330},
+    "16":    {"elbow90_lr": 610, "elbow45_lr": 254, "tee": 305, "reducer": 356},
+    "18":    {"elbow90_lr": 686, "elbow45_lr": 286, "tee": 343, "reducer": 381},
+    "20":    {"elbow90_lr": 762, "elbow45_lr": 318, "tee": 381, "reducer": 508},
+    "24":    {"elbow90_lr": 914, "elbow45_lr": 381, "tee": 432, "reducer": 508}
   }
 }

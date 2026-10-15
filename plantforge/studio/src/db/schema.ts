@@ -27,7 +27,7 @@ CREATE TABLE cat_pipe_wall (
   wall REAL NOT NULL CHECK (wall > 0),
   PRIMARY KEY (nps, schedule)
 );
-CREATE TABLE cat_fitting (nps TEXT PRIMARY KEY, elbow90_lr REAL NOT NULL, elbow45_lr REAL NOT NULL, tee REAL NOT NULL);
+CREATE TABLE cat_fitting (nps TEXT PRIMARY KEY, elbow90_lr REAL NOT NULL, elbow45_lr REAL NOT NULL, tee REAL NOT NULL, reducer REAL);
 CREATE TABLE cat_flange_rating (rating TEXT PRIMARY KEY, rf_height REAL NOT NULL);
 CREATE TABLE cat_flange (
   rating TEXT NOT NULL REFERENCES cat_flange_rating(rating) ON DELETE CASCADE,
