@@ -7,14 +7,15 @@ name: Desktop app
 
 on:
   push:
+    # both are needed: listing only tags would stop the builds on branch pushes
+    branches: ["**"]
+    tags: ["desktop-v*"]
     paths:
       - "plantforge/studio/**"
       - "plantforge/desktop/**"
       - "plantforge/plantforge/data/**"
       - "plantforge/plantforge/specs/**"
       - ".github/workflows/desktop.yml"
-    tags:
-      - "desktop-v*"
   workflow_dispatch:
 
 permissions:
