@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "subtitle-maker"
+version = "1.0.0"
+description = "Generate .srt subtitles for any video so VLC and other players load them automatically"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "faster-whisper>=1.1",
+    "av>=11,<19",  # PyAV 19 removed an argument faster-whisper 1.2.1 still passes
+    "deep-translator>=1.11",
+    "imageio-ffmpeg>=0.5",
+    "tkinterdnd2>=0.4",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+# NVIDIA GPU support on Windows (about 1.3 GB): CUDA 12 cuBLAS + cuDNN 9
+gpu = ["nvidia-cublas-cu12", "nvidia-cudnn-cu12>=9,<10"]
+
+[project.scripts]
+subtitle-maker = "subtitle_maker.cli:main"
+
+[project.gui-scripts]
+subtitle-maker-gui = "subtitle_maker.cli:main"
+
+[tool.setuptools]
+packages = ["subtitle_maker"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
