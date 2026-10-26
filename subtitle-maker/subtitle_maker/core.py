@@ -32,6 +32,10 @@ MODELS = [
 ]
 DEFAULT_MODEL = "small"
 
+# Audio is cut into ~30 s pieces at pauses and this many pieces are decoded
+# together: about twice as fast as one by one.
+BATCH_SIZE = 8
+
 
 class Cancelled(Exception):
     pass
@@ -123,13 +127,14 @@ class SubtitleMaker:
         self.settings = settings
         self.log = log
         self.model = model
+        self.pipeline = model  # what .transcribe() is called on
         self.translator = translator or google_translate
         self.device = None
 
     # -- model -----------------------------------------------------------
 
     def load_model(self, device=None):
-        from faster_whisper import WhisperModel
+        from faster_whisper import BatchedInferencePipeline, WhisperModel
 
         _use_pip_cuda_libraries()
         device = device or self.settings.device
@@ -152,6 +157,7 @@ class SubtitleMaker:
             raise RuntimeError(
                 f"Could not load the '{self.settings.model}' model ({e}). The first "
                 "run needs internet to download it; after that it works offline.") from e
+        self.pipeline = BatchedInferencePipeline(self.model)
         self.device = device
 
     # -- pipeline --------------------------------------------------------
@@ -246,22 +252,28 @@ class SubtitleMaker:
     def _run_whisper(self, video, progress, cancel):
         s = self.settings
         progress(0, "Reading audio…")
-        segments, info = self.model.transcribe(
+        segments, info = self.pipeline.transcribe(
             str(video),
             language=s.language,
             word_timestamps=True,
             vad_filter=True,                   # skip silence/music, fewer hallucinations
             condition_on_previous_text=False,  # avoids repeated-line loops
-            beam_size=5,
+            batch_size=BATCH_SIZE,
+            # Beam search is ~2x slower for a small accuracy gain: worth it
+            # only on a graphics card.
+            beam_size=5 if self.device == "cuda" else 1,
         )
         duration = info.duration or 0
+        progress(0, "Transcribing… (the first update can take a minute)")
+        started = time.monotonic()
 
         def watched():
             for seg in segments:
                 _check(cancel)
                 if duration:
-                    progress(min(seg.end / duration, 1),
-                             f"Transcribing {_clock(seg.end)} / {_clock(duration)}")
+                    done = min(seg.end / duration, 1)
+                    left = _time_left(time.monotonic() - started, done)
+                    progress(done, f"Transcribing {_clock(seg.end)} / {_clock(duration)}{left}")
                 yield seg
 
         return build_cues(watched()), info.language
@@ -270,6 +282,13 @@ class SubtitleMaker:
 def _check(cancel):
     if cancel is not None and cancel.is_set():
         raise Cancelled()
+
+
+def _time_left(elapsed, fraction):
+    if fraction < 0.02 or elapsed < 5:
+        return ""
+    minutes = round(elapsed * (1 - fraction) / fraction / 60)
+    return " — less than a minute left" if minutes < 1 else f" — about {minutes} min left"
 
 
 def _clock(seconds):

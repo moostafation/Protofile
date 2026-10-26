@@ -70,7 +70,16 @@ def test_transcribe_only(video):
     text = srt.read_text(encoding="utf-8-sig")
     assert "00:00:00,500 --> " in text and "Hello and welcome." in text
     assert progress[-1] == 1 and progress == sorted(progress)
-    assert maker.model.calls[0]["language"] is None
+    call = maker.model.calls[0]
+    assert call["language"] is None
+    assert call["batch_size"] == 8 and call["beam_size"] == 1  # fast settings on CPU
+
+
+def test_time_left():
+    assert core._time_left(3, 0.5) == ""             # too early to guess
+    assert core._time_left(60, 0.01) == ""
+    assert core._time_left(600, 0.5) == " — about 10 min left"
+    assert core._time_left(20, 0.5) == " — less than a minute left"
 
 
 def test_translation_keeps_original_and_marks_rtl(video):
@@ -182,8 +191,9 @@ def test_chunks_respect_limit():
 
 
 def test_cli(video, monkeypatch, capsys):
-    monkeypatch.setattr(SubtitleMaker, "load_model",
-                        lambda self, device=None: setattr(self, "model", FakeModel()))
+    def fake_load(self, device=None):
+        self.model = self.pipeline = FakeModel()
+    monkeypatch.setattr(SubtitleMaker, "load_model", fake_load)
     monkeypatch.setattr(core, "google_translate", fake_translator)
     with pytest.raises(SystemExit) as exit_info:
         cli_main([str(video.parent), "--to", "ar", "--no-original"])
