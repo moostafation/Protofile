@@ -6,6 +6,7 @@ import { Viewer } from './render/viewer.js';
 import { CadRenderer, measureText, colorCss } from './render/cad-renderer.js';
 import { PAPERS, exportPdf, exportImagePdf, planPlot } from './render/pdf-export.js';
 import { resolveFormat, openBuffer, acceptAttribute, supportedGroups, formatFor } from './formats/registry.js';
+import { FormatError } from './formats/errors.js';
 import { buildScene, STROKE } from './cad/scene.js';
 import { UNIT_NAMES } from './cad/drawing.js';
 import { polygonArea } from './cad/geometry.js';
@@ -145,6 +146,10 @@ function showLoading(text) {
 const nextFrame = () => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
 
 // ---------------------------------------------------------------- opening files
+/**
+ * Opens any File-like object ({ name, arrayBuffer() }): picker, drag & drop, OS file handling.
+ * The format comes from the registry (extension, corrected by the file's first bytes).
+ */
 async function openFile(file) {
   const name = file.name || 'drawing';
   const known = formatFor(name);
@@ -167,8 +172,10 @@ async function openFile(file) {
     }
     document.title = `${name} – ProtoCAD Viewer`;
   } catch (err) {
-    console.error(err);
-    if (err?.hint && err.hint !== 'unknown') showUnsupported(err.hint, formatFor(name)?.label);
+    // Unreadable files are expected; only unexpected failures are logged as errors.
+    if (err instanceof FormatError) console.warn(err.message);
+    else console.error(err);
+    if (err?.hint && err.hint !== 'unknown') showUnsupported(err.hint, err.label || formatFor(name)?.label);
     else toast(`${t('loadError')}: ${err?.message || err}`, true, 7000);
   } finally {
     showLoading(null);

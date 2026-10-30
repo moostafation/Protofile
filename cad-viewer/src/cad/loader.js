@@ -15,7 +15,7 @@ function getWorker() {
       pending.delete(ev.data.id);
       if (ev.data.ok) p.resolve(ev.data.db);
       else {
-        p.reject(new FormatError(ev.data.error, ev.data.hint));
+        p.reject(new FormatError(ev.data.error, ev.data.hint, ev.data.label));
         // A failed WebAssembly parse can leave the module in a bad state: start fresh next time.
         worker.terminate();
         worker = null;

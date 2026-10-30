@@ -131,9 +131,10 @@ test('DGN V8 is detected with a friendly hint', () => {
 
 test('Damaged and foreign files fail cleanly', () => {
   assert.throws(() => parseDgn(bytes('not a design file')), FormatError);
-  const truncated = fixture('plant-v7.dgn').slice(0, 2000);
-  const db = parseDgn(truncated); // keeps what could be read
-  assert.ok(Array.isArray(db.entities));
+  const full = fixture('plant-v7.dgn');
+  const db = parseDgn(full.slice(0, Math.floor(full.byteLength * 0.6))); // keeps what could be read
+  assert.ok(db.entities.length > 3 && db.entities.length < parseDgn(full).entities.length);
+  assert.throws(() => parseDgn(full.slice(0, 2000)), FormatError, 'settings only, nothing to draw');
 });
 
 console.log('HP-GL');

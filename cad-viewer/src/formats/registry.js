@@ -96,7 +96,7 @@ export function resolveFormat(name, bytes) {
 /** Opens a file buffer. Resolves to { kind: 'cad', drawing } | { kind: 'pdf'|'image', sheet }. */
 export async function openBuffer(format, buffer, name) {
   if (!format) throw new FormatError('Unsupported file type.', 'unknown');
-  if (format.category === 'unsupported') throw new FormatError(`${format.label} files cannot be opened in the browser.`, format.hint);
+  if (format.category === 'unsupported') throw new FormatError(`${format.label} files cannot be opened in the browser.`, format.hint, format.label);
   return format.open(buffer, name);
 }
 

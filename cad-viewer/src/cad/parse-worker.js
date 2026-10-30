@@ -33,6 +33,6 @@ self.onmessage = async (ev) => {
     delete db.thumbnailImage;
     self.postMessage({ id, ok: true, db });
   } catch (err) {
-    self.postMessage({ id, ok: false, error: String(err?.message || err), hint: err?.hint ?? null });
+    self.postMessage({ id, ok: false, error: String(err?.message || err), hint: err?.hint ?? null, label: err?.label ?? null });
   }
 };

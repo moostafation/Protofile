@@ -514,6 +514,7 @@ class DgnReader {
       if (el.type === 9 || el.type === 5) { i++; continue; }
       i = this.convert(els, i, entities);
     }
+    if (!entities.length) throw new FormatError('No drawable elements were found in this DGN file (it may be empty or damaged).');
     const [x0, y0, x1, y1] = this.ext;
     const unit = Number.isFinite(x0) ? Math.max(x1 - x0, y1 - y0) / 400 || 1 : 1;
     const layers = [...this.layers.entries()].sort((a, c) => a[1] - c[1]).map(([name]) => ({
@@ -590,7 +591,7 @@ function decodeText(bytes) {
 export function parseDgn(buffer) {
   const bytes = new Uint8Array(buffer);
   if (isDgnV8(bytes)) {
-    throw new FormatError('This is a MicroStation DGN V8 file, which cannot be opened in the browser.', 'dgnV8');
+    throw new FormatError('This is a MicroStation DGN V8 file, which cannot be opened in the browser.', 'dgnV8', 'DGN V8');
   }
   if (!isDgnV7(bytes)) throw new FormatError('This file is not a MicroStation DGN V7 design file.');
   return new DgnReader(bytes).read();
