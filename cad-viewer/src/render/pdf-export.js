@@ -245,18 +245,44 @@ export function exportPdf(scene, o) {
   const painter = new PdfPainter(doc, o);
   painter.scene(scene, T, k, area, 0, o.model || null);
   doc.restoreGraphicsState();
-  if (o.stamp) {
-    doc.setLineDashPattern([], 0);
-    doc.setDrawColor(0, 0, 0);
-    doc.setLineWidth(0.2);
-    const y = plan.pageH - plan.margin - plan.stampH + 1;
-    doc.line(plan.margin, y, plan.pageW - plan.margin, y);
-    doc.setFontSize(8);
-    doc.setTextColor(0, 0, 0);
-    const date = new Date().toISOString().slice(0, 10);
-    doc.text(asciiOnly(o.title || ''), plan.margin, y + 4);
-    doc.text(`Scale ${plan.scaleLabel}   ${o.paper}   ${date}`, plan.pageW - plan.margin, y + 4, { align: 'right' });
-  }
+  if (o.stamp) titleStrip(doc, plan, o, `Scale ${plan.scaleLabel}   ${o.paper}`);
+  return doc;
+}
+
+function titleStrip(doc, plan, o, info) {
+  doc.setLineDashPattern([], 0);
+  doc.setDrawColor(0, 0, 0);
+  doc.setLineWidth(0.2);
+  const y = plan.pageH - plan.margin - plan.stampH + 1;
+  doc.line(plan.margin, y, plan.pageW - plan.margin, y);
+  doc.setFontSize(8);
+  doc.setTextColor(0, 0, 0);
+  const date = new Date().toISOString().slice(0, 10);
+  doc.text(asciiOnly(o.title || ''), plan.margin, y + 4);
+  doc.text(`${info}   ${date}`, plan.pageW - plan.margin, y + 4, { align: 'right' });
+}
+
+/**
+ * PDF of an image (or part of it) fitted on the paper.
+ * @param sheet ImageDocument; o: paper, orientation, area (image units), stamp, title
+ * @returns {jsPDF}
+ */
+export function exportImagePdf(sheet, o) {
+  const plan = planPlot(null, 0, { ...o, scaleMode: 'fit' });
+  const doc = new jsPDF({ unit: 'mm', format: [plan.pageW, plan.pageH], orientation: plan.landscape ? 'landscape' : 'portrait', compress: true });
+  doc.setProperties({ title: o.title || 'Image', creator: 'ProtoCAD Viewer' });
+  const a = plan.area;
+  const wmm = (a[2] - a[0]) * plan.k, hmm = (a[3] - a[1]) * plan.k;
+  // About 300 dpi on paper; rasters are never enlarged beyond their own pixels.
+  let pw = (wmm / 25.4) * 300, ph = (hmm / 25.4) * 300;
+  let k = Math.min(1, Math.sqrt(36e6 / (pw * ph)), 12000 / Math.max(pw, ph));
+  if (sheet.format !== 'SVG') k = Math.min(k, (a[2] - a[0]) / pw);
+  pw = Math.max(1, Math.round(pw * k));
+  ph = Math.max(1, Math.round(ph * k));
+  const canvas = sheet.renderArea(a, pw, ph);
+  const photo = sheet.format === 'JPEG' || sheet.format === 'WEBP';
+  doc.addImage(canvas, photo ? 'JPEG' : 'PNG', plan.ox, plan.oy, wmm, hmm, undefined, 'FAST');
+  if (o.stamp) titleStrip(doc, plan, o, `${sheet.format} ${Math.round(a[2] - a[0])}×${Math.round(a[3] - a[1])} px   ${o.paper}`);
   return doc;
 }
 

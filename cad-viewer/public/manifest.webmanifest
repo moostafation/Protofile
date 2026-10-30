@@ -1,7 +1,7 @@
 {
   "name": "ProtoCAD Viewer",
   "short_name": "ProtoCAD",
-  "description": "AutoCAD DWG/DXF and PDF viewer with measuring, PDF printing and an AI assistant.",
+  "description": "Viewer for AutoCAD DWG/DXF, MicroStation DGN, HP-GL plot files, PDFs and images, with measuring, PDF printing and an AI assistant.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
@@ -16,11 +16,20 @@
     {
       "action": "./",
       "accept": {
-        "image/vnd.dwg": [".dwg"],
+        "image/vnd.dwg": [".dwg", ".dwt", ".dws"],
         "application/acad": [".dwg"],
         "image/vnd.dxf": [".dxf"],
         "application/dxf": [".dxf"],
-        "application/pdf": [".pdf"]
+        "application/x-dgn": [".dgn"],
+        "application/vnd.hp-hpgl": [".plt", ".hpgl", ".hgl", ".hp2", ".pen"],
+        "application/pdf": [".pdf"],
+        "image/png": [".png"],
+        "image/jpeg": [".jpg", ".jpeg"],
+        "image/gif": [".gif"],
+        "image/bmp": [".bmp"],
+        "image/webp": [".webp"],
+        "image/svg+xml": [".svg"],
+        "image/tiff": [".tif", ".tiff"]
       }
     }
   ]

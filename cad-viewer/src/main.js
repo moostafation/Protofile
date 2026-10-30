@@ -4,8 +4,8 @@ import { fillIcons, icon } from './ui/icons.js';
 import { renderMarkdown } from './ui/markdown.js';
 import { Viewer } from './render/viewer.js';
 import { CadRenderer, measureText, colorCss } from './render/cad-renderer.js';
-import { PAPERS, exportPdf, planPlot } from './render/pdf-export.js';
-import { loadCad } from './cad/loader.js';
+import { PAPERS, exportPdf, exportImagePdf, planPlot } from './render/pdf-export.js';
+import { resolveFormat, openBuffer, acceptAttribute, supportedGroups, formatFor } from './formats/registry.js';
 import { buildScene, STROKE } from './cad/scene.js';
 import { UNIT_NAMES } from './cad/drawing.js';
 import { polygonArea } from './cad/geometry.js';
@@ -33,7 +33,7 @@ function saveUiPrefs() {
 
 const prefs = loadUiPrefs();
 const state = {
-  doc: null, // { kind: 'cad', drawing, spaces, active } | { kind: 'pdf', pdf }
+  doc: null, // { kind: 'cad', drawing, spaces, active } | { kind: 'pdf' | 'image', sheet } (page-like documents)
   hidden: new Set(),
   selection: [],
   highlights: [],
@@ -42,7 +42,7 @@ const state = {
   theme: THEMES[prefs.theme] ? prefs.theme : 'dark',
   showLw: !!prefs.showLw,
   snap: true,
-  pdfScale: null,
+  sheetScale: null, // calibrated { factor, unit } for PDFs and images
   print: { paper: 'A3', orientation: 'auto', area: 'extents', scale: 'fit', color: 'mono', lw: true, stamp: true, window: null },
 };
 
@@ -76,6 +76,8 @@ const app = {
 
 const isHidden = (layer) => state.hidden.has(layer);
 const activeSpace = () => (state.doc?.kind === 'cad' ? state.doc.spaces[state.doc.active] : null);
+/** The open PDF or image (page-like documents share paging, measuring and printing). */
+const activeSheet = () => state.doc?.sheet ?? null;
 
 const measureEnv = {
   store: state.measures,
@@ -90,15 +92,17 @@ const measureEnv = {
     const d = Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]);
     const v = parseFloat((prompt(t('realDistance')) || '').replace(',', '.'));
     if (d > 0 && v > 0) {
-      state.pdfScale = { factor: v / d, unit: 'm' };
-      toast(`${t('pdfScale')}: 1 pt = ${(v / d).toFixed(5)} m`);
+      state.sheetScale = { factor: v / d, unit: 'm' };
+      toast(`${t('pdfScale')}: 1 ${activeSheet()?.unit === 'px' ? 'px' : 'pt'} = ${(v / d).toFixed(5)} m`);
+      buildInfoPanel();
     }
     setTool('select');
   },
 };
 
 function measureUnits() {
-  if (state.doc?.kind === 'pdf') return state.pdfScale || { factor: 25.4 / 72, unit: 'mm' };
+  if (state.doc?.kind === 'pdf') return state.sheetScale || { factor: 25.4 / 72, unit: 'mm' };
+  if (state.doc?.kind === 'image') return state.sheetScale || { factor: 1, unit: 'px' };
   const units = state.doc?.drawing?.units;
   return { factor: 1, unit: UNIT_NAMES[units] || '' };
 }
@@ -111,14 +115,15 @@ function applyI18n() {
   for (const el of $$('[data-i18n]')) el.textContent = t(el.dataset.i18n);
   for (const el of $$('[data-i18n-title]')) { el.title = t(el.dataset.i18nTitle); el.setAttribute('aria-label', el.title); }
   for (const el of $$('[data-i18n-placeholder]')) el.placeholder = t(el.dataset.i18nPlaceholder);
+  $('#formatsText').textContent = supportedGroups().map((g) => `${t('fmt_' + g.category)}: ${g.labels.join(getLang() === 'ar' ? '، ' : ', ')}`).join(' · ');
   buildQuickPrompts();
 }
 
+/** data-needs lists the document kinds an element is shown for: doc, cad, pdf, image or sheet (pdf + image). */
 function updateNeeds() {
   const kind = state.doc?.kind;
   for (const el of $$('[data-needs]')) {
-    const need = el.dataset.needs;
-    el.hidden = need === 'doc' ? !kind : need !== kind;
+    el.hidden = !el.dataset.needs.split(/\s+/).some((need) => (need === 'doc' ? !!kind : need === 'sheet' ? kind === 'pdf' || kind === 'image' : need === kind));
   }
   $('#welcome').hidden = !!kind;
 }
@@ -142,31 +147,41 @@ const nextFrame = () => new Promise((r) => requestAnimationFrame(() => setTimeou
 // ---------------------------------------------------------------- opening files
 async function openFile(file) {
   const name = file.name || 'drawing';
-  const ext = name.split('.').pop().toLowerCase();
-  if (!['dwg', 'dxf', 'pdf'].includes(ext)) {
-    toast(t('unsupported'), true);
-    return;
-  }
+  const known = formatFor(name);
+  if (known?.category === 'unsupported') { showUnsupported(known.hint, known.label); return; }
   showLoading(t('loading'));
   try {
     const buffer = await file.arrayBuffer();
-    if (ext === 'pdf') {
-      const { openPdf } = await import('./pdf/pdf-doc.js');
-      const pdf = await openPdf(buffer, name);
-      setPdfDoc(pdf);
-    } else {
-      const drawing = await loadCad(buffer, name);
+    const format = resolveFormat(name, new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 16)));
+    if (!format) {
+      toast(t('unsupported'), true, 6000);
+      return;
+    }
+    const result = await openBuffer(format, buffer, name);
+    if (result.kind === 'cad') {
       showLoading(t('building'));
       await nextFrame();
-      setCadDoc(drawing);
+      setCadDoc(result.drawing);
+    } else {
+      setSheetDoc(result.kind, result.sheet);
     }
     document.title = `${name} – ProtoCAD Viewer`;
   } catch (err) {
     console.error(err);
-    toast(`${t('loadError')}: ${err.message || err}`, true, 7000);
+    if (err?.hint && err.hint !== 'unknown') showUnsupported(err.hint, formatFor(name)?.label);
+    else toast(`${t('loadError')}: ${err?.message || err}`, true, 7000);
   } finally {
     showLoading(null);
   }
+}
+
+/** Explains why a known format cannot be opened and which export to use instead. */
+function showUnsupported(hint, label) {
+  showLoading(null);
+  const dlg = $('#unsupportedDialog');
+  $('#unsupportedTitle').textContent = t('unsupportedTitle').replace('{fmt}', label || t('thisFile'));
+  $('#unsupportedText').textContent = t('hint_' + hint) === 'hint_' + hint ? t('unsupported') : t('hint_' + hint);
+  dlg.showModal();
 }
 
 function makeSpace(drawing, name, entities, isLayout) {
@@ -176,11 +191,12 @@ function makeSpace(drawing, name, entities, isLayout) {
 }
 
 function resetDocState() {
+  activeSheet()?.dispose?.();
   state.selection = [];
   state.highlights = [];
   state.pdfHits = [];
   state.measures.length = 0;
-  state.pdfScale = null;
+  state.sheetScale = null;
   assistant.reset();
   $('#aiLog').innerHTML = '';
   $('#searchInput').value = '';
@@ -222,24 +238,30 @@ function activateSpace(i) {
   showProperties();
 }
 
-function setPdfDoc(pdf) {
+function setSheetDoc(kind, sheet) {
   resetDocState();
-  state.doc = { kind: 'pdf', pdf };
+  state.doc = { kind, sheet };
   updateNeeds();
-  viewer.setDocument(pdf);
+  viewer.setDocument(sheet);
   buildSpaceTabs();
   buildThumbs();
   buildInfoPanel();
-  setSideTab(window.innerWidth > 860 && pdf.pageCount > 1 ? 'pages' : null);
+  setSideTab(window.innerWidth > 860 && sheet.pageCount > 1 ? 'pages' : null);
   setTool('select');
   if (!$('#rightbar').hidden && $('#rightTabs .active')?.dataset.rtab === 'ai') showAiIntro();
 }
 
 async function gotoPage(n) {
-  const pdf = state.doc.pdf;
-  if (n < 1 || n > pdf.pageCount || n === pdf.pageNo) return;
-  await pdf.setPage(n);
-  viewer.setDocument(pdf);
+  const sheet = activeSheet();
+  if (!sheet || n < 1 || n > sheet.pageCount || n === sheet.pageNo) return;
+  try {
+    await sheet.setPage(n);
+  } catch (err) {
+    toast(`${t('loadError')}: ${err?.message || err}`, true);
+    return;
+  }
+  viewer.setDocument(sheet);
+  buildInfoPanel();
   state.measures.length = 0;
   buildSpaceTabs();
   for (const el of $$('.thumb')) el.classList.toggle('active', +el.dataset.page === n);
@@ -253,7 +275,7 @@ function drawOverlay(o, v) {
     if (state.selection.length) app.drawItemsOverlay(o, v, state.selection, '#ff9f1c', 3);
   }
   if (state.doc?.kind === 'pdf' && state.pdfHits.length) {
-    const page = state.doc.pdf.pageNo;
+    const page = state.doc.sheet.pageNo;
     o.setTransform(v.dpr, 0, 0, v.dpr, 0, 0);
     for (const h of state.pdfHits) {
       if (h.page !== page) continue;
@@ -285,7 +307,7 @@ function updateStatus(w) {
     const u = UNIT_NAMES[state.doc.drawing.units];
     if (u) parts.push(u);
   } else {
-    parts.push(`${Math.round(viewer.view.scale * 100 * 72 / 96)}%`);
+    parts.push(`${Math.round((viewer.view.scale * 100) / activeSheet().pxPerUnit)}%`);
   }
   el.textContent = parts.join('   ·   ');
 }
@@ -329,7 +351,7 @@ function setSideTab(name) {
   if (!name) {
     sb.classList.remove('open');
     name = $('#sideTabs button.active:not([hidden])')?.dataset.tab;
-    if (!name || $(`#sideTabs [data-tab="${name}"]`).hidden) name = state.doc?.kind === 'pdf' ? 'search' : 'layers';
+    if (!name || $(`#sideTabs [data-tab="${name}"]`).hidden) name = { pdf: 'search', image: 'info' }[state.doc?.kind] || 'layers';
   }
   for (const b of $$('#sideTabs button')) b.classList.toggle('active', b.dataset.tab === name);
   for (const p of $$('.tab-panel')) p.classList.toggle('active', p.dataset.panel === name);
@@ -416,8 +438,15 @@ function buildInfoPanel() {
       ['Layouts', d.layouts.map((l) => l.name).join(', ') || '-']);
     if (sp.scene.warnings.length) rows.push([t('warnings'), sp.scene.warnings.slice(0, 12).join(', ')]);
   } else if (doc?.kind === 'pdf') {
-    rows.push([t('file'), doc.pdf.fileName], [t('format'), 'PDF'], [t('pages'), String(doc.pdf.pageCount)],
-      [t('size'), `${formatNum(doc.pdf.bbox[2] * 25.4 / 72, 0)} × ${formatNum(doc.pdf.bbox[3] * 25.4 / 72, 0)} mm`]);
+    const pdf = doc.sheet;
+    rows.push([t('file'), pdf.fileName], [t('format'), 'PDF'], [t('pages'), String(pdf.pageCount)],
+      [t('size'), `${formatNum(pdf.bbox[2] * 25.4 / 72, 0)} × ${formatNum(pdf.bbox[3] * 25.4 / 72, 0)} mm`]);
+  } else if (doc?.kind === 'image') {
+    const img = doc.sheet;
+    rows.push([t('file'), img.fileName], [t('format'), img.format], [t('pixelSize'), `${formatNum(img.width, 0)} × ${formatNum(img.height, 0)} px`]);
+    if (img.pageCount > 1) rows.push([t('pages'), `${img.pageNo} / ${img.pageCount}`]);
+    rows.push([t('fileSize'), formatBytes(img.buffer.byteLength)]);
+    if (state.sheetScale) rows.push([t('pdfScale'), `1 px = ${state.sheetScale.factor.toPrecision(4)} m`]);
   }
   dl.innerHTML = rows.map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd dir="auto">${escapeHtml(v)}</dd>`).join('');
 }
@@ -434,8 +463,8 @@ function buildSpaceTabs() {
       b.addEventListener('click', () => { if (i !== doc.active) { activateSpace(i); } });
       host.append(b);
     });
-  } else if (doc?.kind === 'pdf') {
-    const pdf = doc.pdf;
+  } else if (doc?.kind === 'pdf' || doc?.sheet?.pageCount > 1) {
+    const pdf = doc.sheet;
     const wrap = document.createElement('span');
     wrap.className = 'pager';
     const rtl = getLang() === 'ar';
@@ -451,7 +480,7 @@ function buildSpaceTabs() {
 function buildThumbs() {
   const host = $('#thumbs');
   host.innerHTML = '';
-  const pdf = state.doc.pdf;
+  const pdf = activeSheet();
   const io = new IntersectionObserver((entries) => {
     for (const e of entries) {
       if (!e.isIntersecting || e.target.dataset.done) continue;
@@ -506,10 +535,10 @@ async function runSearch() {
     }
     viewer.renderOverlay();
   } else {
-    const hits = await doc.pdf.search(q);
+    const hits = await doc.sheet.search(q);
     if ($('#searchInput').value !== q) return;
     state.pdfHits = hits;
-    $('#searchCount').textContent = hits.length ? `${hits.length} ${t('results')}` : t('noResults');
+    $('#searchCount').textContent = hits.length ? `${hits.length} ${t('results')}` : doc.kind === 'image' ? t('imageNoText') : t('noResults');
     for (const h of hits) {
       const li = document.createElement('li');
       li.innerHTML = `<span class="name">${escapeHtml(h.text)}</span><span class="tag">${t('page')} ${h.page}</span>`;
@@ -602,15 +631,25 @@ const assistant = new Assistant({
       const sp = activeSpace();
       return { key: `${doc.drawing.fileName}|${sp.name}|${sp.scene.items.length}`, title: doc.drawing.fileName, text: drawingSummary(doc.drawing, sp.scene, sp.analysis, sp.name) };
     }
-    const { text } = await doc.pdf.fullText();
-    return { key: `pdf|${doc.pdf.fileName}|${doc.pdf.pageCount}`, title: doc.pdf.fileName, text: `PDF document "${doc.pdf.fileName}", ${doc.pdf.pageCount} page(s). The user is viewing page ${doc.pdf.pageNo}.\n${text}` };
+    const sheet = doc.sheet;
+    if (doc.kind === 'image') {
+      // Images carry no text: the page itself goes to the model.
+      return {
+        key: `image|${sheet.fileName}|${sheet.pageNo}`, title: sheet.fileName,
+        text: `${sheet.format} image "${sheet.fileName}", ${Math.round(sheet.width)} × ${Math.round(sheet.height)} pixels, ${formatBytes(sheet.buffer.byteLength)}${sheet.pageCount > 1 ? `, page ${sheet.pageNo} of ${sheet.pageCount}` : ''}. There is no extracted text; the image is attached.`,
+        images: [imageDataUrl(sheet.pageImage(1568))],
+      };
+    }
+    const { text } = await sheet.fullText();
+    return { key: `pdf|${sheet.fileName}|${sheet.pageCount}`, title: sheet.fileName, text: `PDF document "${sheet.fileName}", ${sheet.pageCount} page(s). The user is viewing page ${sheet.pageNo}.\n${text}` };
   },
   captureView: () => viewer.captureView(),
   tools: {
     async find_in_drawing({ query }) {
       const doc = state.doc;
+      if (doc.kind === 'image') return { matches: [], total: 0, note: 'Images have no searchable text; read the attached image instead.' };
       if (doc.kind === 'pdf') {
-        const hits = await doc.pdf.search(query, 60);
+        const hits = await doc.sheet.search(query, 60);
         state.pdfHits = hits;
         viewer.renderOverlay();
         return { matches: hits.slice(0, 40).map((h) => ({ page: h.page, text: h.text })), total: hits.length };
@@ -624,15 +663,16 @@ const assistant = new Assistant({
     },
     async zoom_to({ item_ids, page, text }) {
       const doc = state.doc;
-      if (doc.kind === 'pdf') {
+      if (doc.sheet) {
         if (page) await gotoPage(page);
-        if (text) {
-          const hits = (await doc.pdf.search(text, 50)).filter((h) => h.page === doc.pdf.pageNo);
+        if (text && doc.kind === 'pdf') {
+          const hits = (await doc.sheet.search(text, 50)).filter((h) => h.page === doc.sheet.pageNo);
           state.pdfHits = hits;
           if (hits[0]) await focusPdfHit(hits[0]);
-          return { page: doc.pdf.pageNo, highlighted: hits.length };
+          return { page: doc.sheet.pageNo, highlighted: hits.length };
         }
-        return { page: doc.pdf.pageNo };
+        viewer.zoomExtents();
+        return { page: doc.sheet.pageNo };
       }
       const ids = (item_ids || []).filter((i) => activeSpace().scene.items[i]);
       state.highlights = ids;
@@ -641,7 +681,7 @@ const assistant = new Assistant({
     },
     async set_layers({ only, show, hide, reset }) {
       const d = state.doc.drawing;
-      if (!d) return { error: 'No CAD drawing is open' };
+      if (!d) return { error: 'No CAD drawing is open (layers only exist in CAD drawings).' };
       const names = [...d.layers.keys()];
       const match = (n) => names.filter((x) => x.toLowerCase() === n.toLowerCase());
       if (reset) state.hidden = new Set();
@@ -808,9 +848,12 @@ $('#settingsDialog').addEventListener('close', () => {
 // ---------------------------------------------------------------- printing
 function openPrint() {
   const dlg = $('#printDialog');
-  const isPdf = state.doc.kind === 'pdf';
+  const kind = state.doc.kind;
+  const isPdf = kind === 'pdf';
   $('.print-grid', dlg).hidden = isPdf;
   $('#pdfPrint').hidden = !isPdf;
+  // Images use paper, orientation, area and title strip; scale/colour/lineweights are CAD-only.
+  for (const el of $$('[data-print="cad"]', dlg)) el.hidden = kind !== 'cad';
   $('#pDownload span').textContent = isPdf ? t('downloadOriginal') : t('downloadPdf');
   if (!isPdf) {
     const p = state.print;
@@ -843,9 +886,17 @@ function readPrintOptions() {
 function plotOptions() {
   const p = readPrintOptions();
   const sp = activeSpace();
-  let area = sp.scene.bbox;
+  const sheet = activeSheet();
+  let area = sp ? sp.scene.bbox : sheet.bbox;
   if (p.area === 'view') area = viewer.visibleBounds();
   if (p.area === 'window' && p.window) area = p.window;
+  if (sheet) {
+    // Images: the area is clipped to the picture and always fitted to the paper.
+    const b = sheet.bbox;
+    area = [Math.max(area[0], b[0]), Math.max(area[1], b[1]), Math.min(area[2], b[2]), Math.min(area[3], b[3])];
+    if (area[0] >= area[2] || area[1] >= area[3]) area = b;
+    return { paper: p.paper, orientation: p.orientation, area, scaleMode: 'fit', stamp: p.stamp, title: `${sheet.fileName}${sheet.pageCount > 1 ? ` – ${t('page')} ${sheet.pageNo}` : ''}` };
+  }
   return {
     paper: p.paper, orientation: p.orientation, area,
     scaleMode: p.scale === 'fit' ? 'fit' : 'ratio', ratio: Number(p.scale),
@@ -859,7 +910,7 @@ function plotOptions() {
 function updatePrintPreview() {
   const sp = activeSpace();
   const o = plotOptions();
-  const plan = planPlot(sp.scene, o.units, o);
+  const plan = planPlot(sp?.scene, o.units, o);
   const c = $('#pPreview');
   const maxW = 520, maxH = 400;
   const k = Math.min(maxW / plan.pageW, maxH / plan.pageH);
@@ -880,10 +931,15 @@ function updatePrintPreview() {
   ctx.rect(m * s, m * s, (plan.pageW - 2 * m) * s, (plan.pageH - 2 * m - plan.stampH) * s);
   ctx.clip();
   const a = plan.area;
-  ctx.setTransform(s * plan.k, 0, 0, -s * plan.k, s * (plan.ox - a[0] * plan.k), s * (plan.oy + a[3] * plan.k));
-  const theme = o.colorMode === 'color' ? { bg: '#ffffff', fg: '#000000', mono: false } : { bg: '#ffffff', fg: '#000000', mono: true };
-  const vb = [a[0] - (plan.ox / plan.k), a[1] - plan.pageH / plan.k, a[2] + plan.pageW / plan.k, a[3] + plan.oy / plan.k];
-  sp.renderer.draw(ctx, { scale: s * plan.k / dpr, bounds: vb, dpr }, { theme, hidden: isHidden, showLw: o.lineweights, model: sp.isLayout ? state.doc.spaces[0].renderer : null });
+  if (sp) {
+    ctx.setTransform(s * plan.k, 0, 0, -s * plan.k, s * (plan.ox - a[0] * plan.k), s * (plan.oy + a[3] * plan.k));
+    const theme = o.colorMode === 'color' ? { bg: '#ffffff', fg: '#000000', mono: false } : { bg: '#ffffff', fg: '#000000', mono: true };
+    const vb = [a[0] - (plan.ox / plan.k), a[1] - plan.pageH / plan.k, a[2] + plan.pageW / plan.k, a[3] + plan.oy / plan.k];
+    sp.renderer.draw(ctx, { scale: s * plan.k / dpr, bounds: vb, dpr }, { theme, hidden: isHidden, showLw: o.lineweights, model: sp.isLayout ? state.doc.spaces[0].renderer : null });
+  } else {
+    const w = (a[2] - a[0]) * plan.k * s, h = (a[3] - a[1]) * plan.k * s;
+    ctx.drawImage(activeSheet().renderArea(a, w, h), plan.ox * s, plan.oy * s, w, h);
+  }
   ctx.restore();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.strokeStyle = 'rgba(0,0,0,0.25)';
@@ -894,16 +950,18 @@ function updatePrintPreview() {
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
     ctx.fillRect(m * s, (plan.pageH - m - plan.stampH + 1) * s, (plan.pageW - 2 * m) * s, Math.max(1, 0.3 * s));
   }
-  $('#pInfo').textContent = `${o.paper} ${plan.landscape ? t('landscape') : t('portrait')} · ${Math.round(plan.pageW)}×${Math.round(plan.pageH)} mm · ${t('scaleLabel')} ${plan.scaleLabel}`;
+  const scale = sp ? ` · ${t('scaleLabel')} ${plan.scaleLabel}` : '';
+  $('#pInfo').textContent = `${o.paper} ${plan.landscape ? t('landscape') : t('portrait')} · ${Math.round(plan.pageW)}×${Math.round(plan.pageH)} mm${scale}`;
 }
 
 function makePlotPdf() {
   const sp = activeSpace();
+  if (!sp) return exportImagePdf(activeSheet(), plotOptions());
   return exportPdf(sp.scene, plotOptions());
 }
 
 function pdfFileName() {
-  const base = (state.doc.kind === 'cad' ? state.doc.drawing.fileName : state.doc.pdf.fileName).replace(/\.[^.]+$/, '');
+  const base = (state.doc.kind === 'cad' ? state.doc.drawing.fileName : state.doc.sheet.fileName).replace(/\.[^.]+$/, '');
   const sp = activeSpace();
   return `${base}${sp?.isLayout ? '-' + sp.name : ''}.pdf`;
 }
@@ -956,7 +1014,7 @@ $('#printOptions').addEventListener('change', (ev) => {
 
 $('#pDownload').addEventListener('click', () => {
   if (state.doc.kind === 'pdf') {
-    download(new Blob([state.doc.pdf.buffer], { type: 'application/pdf' }), state.doc.pdf.fileName);
+    download(new Blob([state.doc.sheet.buffer], { type: 'application/pdf' }), state.doc.sheet.fileName);
     return;
   }
   makePlotPdf().save(pdfFileName());
@@ -964,7 +1022,7 @@ $('#pDownload').addEventListener('click', () => {
 
 $('#pPrint').addEventListener('click', () => {
   if (state.doc.kind === 'pdf') {
-    printBlob(new Blob([state.doc.pdf.buffer], { type: 'application/pdf' }));
+    printBlob(new Blob([state.doc.sheet.buffer], { type: 'application/pdf' }));
   } else {
     printBlob(makePlotPdf().output('blob'));
   }
@@ -1071,8 +1129,8 @@ document.addEventListener('keydown', (ev) => {
   } else if ((ev.key === 'f' || ev.key === 'F' || ev.key === 'Home') && state.doc) viewer.zoomExtents();
   else if ((ev.key === '+' || ev.key === '=') && state.doc) viewer.zoomAt(1.5);
   else if (ev.key === '-' && state.doc) viewer.zoomAt(1 / 1.5);
-  else if (ev.key === 'PageDown' && state.doc?.kind === 'pdf') gotoPage(state.doc.pdf.pageNo + 1);
-  else if (ev.key === 'PageUp' && state.doc?.kind === 'pdf') gotoPage(state.doc.pdf.pageNo - 1);
+  else if (ev.key === 'PageDown' && activeSheet()) gotoPage(activeSheet().pageNo + 1);
+  else if (ev.key === 'PageUp' && activeSheet()) gotoPage(activeSheet().pageNo - 1);
   else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'o') { ev.preventDefault(); $('#fileInput').click(); }
   else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'p' && state.doc) { ev.preventDefault(); openPrint(); }
   else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'f' && state.doc) { ev.preventDefault(); setSideTab('search'); $('#sidebar').classList.add('open'); }
@@ -1111,11 +1169,22 @@ async function openSample() {
   }
 }
 
+function formatBytes(n) {
+  return n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+}
+
+/** PNG data URL of a canvas, or JPEG when the PNG would be too large to send. */
+function imageDataUrl(c) {
+  const png = c.toDataURL('image/png');
+  return png.length < 4.5e6 ? png : c.toDataURL('image/jpeg', 0.85);
+}
+
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
 
 // ---------------------------------------------------------------- start
+$('#fileInput').accept = acceptAttribute();
 fillIcons();
 applyI18n();
 updateNeeds();

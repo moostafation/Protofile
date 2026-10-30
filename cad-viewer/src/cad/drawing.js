@@ -48,7 +48,7 @@ function layerColor(l, source) {
 
 /**
  * @param {object} db DwgDatabase-like object
- * @param {'dwg'|'dxf'} source
+ * @param {'dwg'|'dxf'|'dgn'|'hpgl'} source (only DWG encodes lineweights differently)
  */
 export function buildDrawing(db, source, fileName) {
   const layers = new Map();

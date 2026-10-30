@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="theme-color" content="#14171c" />
-  <meta name="description" content="ProtoCAD Viewer: view AutoCAD DWG/DXF and PDF files, measure, print to PDF and ask an AI assistant about the drawing." />
+  <meta name="description" content="ProtoCAD Viewer: view AutoCAD DWG/DXF, MicroStation DGN, HP-GL plot files, PDFs and images (TIFF scans, SVG), measure, print to PDF and ask an AI assistant about the drawing." />
   <link rel="icon" href="icon.svg" type="image/svg+xml" />
   <link rel="manifest" href="manifest.webmanifest" />
   <title>ProtoCAD Viewer</title>
@@ -31,7 +31,7 @@
             <button data-action="measure:dist"><i data-icon="ruler"></i><span data-i18n="measureDist"></span></button>
             <button data-action="measure:path"><i data-icon="path"></i><span data-i18n="measurePath"></span></button>
             <button data-action="measure:area"><i data-icon="area"></i><span data-i18n="measureArea"></span></button>
-            <button data-action="measure:calibrate" data-needs="pdf"><i data-icon="calibrate"></i><span data-i18n="calibrate"></span></button>
+            <button data-action="measure:calibrate" data-needs="sheet"><i data-icon="calibrate"></i><span data-i18n="calibrate"></span></button>
             <hr />
             <label class="menu-check"><input type="checkbox" id="snapToggle" checked /><span data-i18n="snap"></span></label>
             <button data-action="measure:clear"><i data-icon="trash"></i><span data-i18n="measureClear"></span></button>
@@ -52,7 +52,7 @@
         <nav class="tabs" id="sideTabs">
           <button data-tab="layers" data-needs="cad"><i data-icon="layers"></i><span data-i18n="layers"></span></button>
           <button data-tab="blocks" data-needs="cad"><i data-icon="blocks"></i><span data-i18n="blocks"></span></button>
-          <button data-tab="pages" data-needs="pdf"><i data-icon="pages"></i><span data-i18n="pages"></span></button>
+          <button data-tab="pages" data-needs="sheet"><i data-icon="pages"></i><span data-i18n="pages"></span></button>
           <button data-tab="search"><i data-icon="search"></i><span data-i18n="search"></span></button>
           <button data-tab="info"><i data-icon="info"></i><span data-i18n="info"></span></button>
         </nav>
@@ -94,7 +94,7 @@
               <button class="btn primary" data-action="open"><i data-icon="open"></i><span data-i18n="open"></span></button>
               <button class="btn" data-action="sample"><i data-icon="blocks"></i><span data-i18n="sample"></span></button>
             </div>
-            <p class="muted small" data-i18n="formats"></p>
+            <p class="muted small" id="formatsText"></p>
             <p class="muted small" data-i18n="privacy"></p>
           </div>
         </div>
@@ -146,11 +146,11 @@
             <select id="pOrient"><option value="auto" data-i18n="auto"></option><option value="landscape" data-i18n="landscape"></option><option value="portrait" data-i18n="portrait"></option></select></label>
           <label><span data-i18n="plotArea"></span>
             <select id="pArea"><option value="extents" data-i18n="areaExtents"></option><option value="view" data-i18n="areaView"></option><option value="window" data-i18n="areaWindow"></option></select></label>
-          <label><span data-i18n="scaleLabel"></span>
+          <label data-print="cad"><span data-i18n="scaleLabel"></span>
             <select id="pScale"></select></label>
-          <label><span data-i18n="colorMode"></span>
+          <label data-print="cad"><span data-i18n="colorMode"></span>
             <select id="pColor"><option value="mono" data-i18n="colorMono"></option><option value="color" data-i18n="colorColor"></option><option value="gray" data-i18n="colorGray"></option></select></label>
-          <label class="check"><input type="checkbox" id="pLw" checked /><span data-i18n="plotLineweights"></span></label>
+          <label class="check" data-print="cad"><input type="checkbox" id="pLw" checked /><span data-i18n="plotLineweights"></span></label>
           <label class="check"><input type="checkbox" id="pStamp" checked /><span data-i18n="stamp"></span></label>
         </div>
         <div class="print-preview"><canvas id="pPreview"></canvas><div class="muted small" id="pInfo"></div></div>
@@ -161,6 +161,18 @@
         <span class="spacer"></span>
         <button type="button" class="btn" id="pDownload"><i data-icon="download"></i><span data-i18n="downloadPdf"></span></button>
         <button type="button" class="btn primary" id="pPrint"><i data-icon="print"></i><span data-i18n="printNow"></span></button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="unsupportedDialog" class="dialog">
+    <form method="dialog" class="dialog-body">
+      <h2 id="unsupportedTitle"></h2>
+      <p id="unsupportedText" class="unsupported-text"></p>
+      <p class="muted small" data-i18n="unsupportedMore"></p>
+      <div class="dialog-actions">
+        <span class="spacer"></span>
+        <button value="ok" class="btn primary" data-i18n="ok"></button>
       </div>
     </form>
   </dialog>
@@ -191,7 +203,8 @@
     </form>
   </dialog>
 
-  <input type="file" id="fileInput" accept=".dwg,.dxf,.pdf,application/pdf" hidden />
+  <!-- accept is filled from the format registry at start-up -->
+  <input type="file" id="fileInput" hidden />
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>

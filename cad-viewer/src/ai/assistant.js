@@ -9,9 +9,9 @@ import Anthropic from '@anthropic-ai/sdk';
 export const DEFAULT_MODEL = 'claude-opus-5-5';
 const MAX_TOOL_ROUNDS = 8;
 
-const SYSTEM = `You are the assistant built into ProtoCAD Viewer, a viewer for AutoCAD drawings (DWG/DXF) and PDF documents used by piping, MEP and plant design engineers.
+const SYSTEM = `You are the assistant built into ProtoCAD Viewer, a viewer for CAD drawings (AutoCAD DWG/DXF, MicroStation DGN, HP-GL plot files), PDF documents and images (scans, photos, SVG) used by piping, MEP and plant design engineers.
 
-The current document's extracted data is given inside <document> in the first user message: layers with entity counts and linework lengths, block references with counts and attribute values, and all texts. For PDFs it is the extracted text per page. The user may also attach an image of the current view.
+The current document's extracted data is given inside <document> in the first user message: layers (DGN levels, plotter pens) with entity counts and linework lengths, block references (DGN cells) with counts and attribute values, and all texts. For PDFs it is the extracted text per page. Images have no extracted text: the image itself is attached to the first message, so read it visually. The user may also attach an image of the current view.
 
 How to work:
 - Reply in the language the user writes in (Arabic or English). Keep engineering terms (layer names, tags, sizes) exactly as they appear in the drawing.
@@ -91,7 +91,7 @@ function validate(name, input) {
 export class Assistant {
   /**
    * @param host {
-   *   getDocument(): Promise<{ key, title, text }>,   // data for <document>
+   *   getDocument(): Promise<{ key, title, text, images? }>, // data for <document>, optional image data URLs
    *   captureView(): string,                          // PNG data URL of the current view
    *   tools: { find_in_drawing, zoom_to, set_layers, item_details } // async (input) => result
    * }
@@ -151,11 +151,10 @@ export class Assistant {
       const content = [];
       if (!this.messages.length) {
         content.push({ type: 'text', text: `<document title="${escapeAttr(doc.title)}">\n${doc.text}\n</document>` });
+        for (const url of doc.images ?? []) content.push(imageBlock(url));
       }
       if (opts.includeView) {
-        const url = this.host.captureView();
-        const data = url.slice(url.indexOf(',') + 1);
-        content.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data } });
+        content.push(imageBlock(this.host.captureView()));
         content.push({ type: 'text', text: '(Attached: image of what is currently visible in the viewer.)' });
       }
       content.push({ type: 'text', text });
@@ -243,6 +242,12 @@ function errorCode(err) {
   if (err instanceof Anthropic.APIConnectionError) return 'network';
   if (err instanceof Anthropic.APIError) return 'api';
   return 'unknown';
+}
+
+/** Image content block from a PNG or JPEG data URL. */
+function imageBlock(url) {
+  const media = /^data:(image\/[a-z]+);/.exec(url)?.[1] || 'image/png';
+  return { type: 'image', source: { type: 'base64', media_type: media, data: url.slice(url.indexOf(',') + 1) } };
 }
 
 function escapeAttr(s) {

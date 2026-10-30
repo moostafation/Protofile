@@ -1,8 +1,10 @@
-// Parses DWG (libredwg WebAssembly) and DXF files off the main thread.
+// Parses CAD files off the main thread: DWG (libredwg WebAssembly), DXF, DGN V7 and HP-GL.
 import { LibreDwg, createModule, Dwg_File_Type } from '@mlightcad/libredwg-web';
 // The package does not export its .wasm file, so it is referenced by path.
 import wasmUrl from '../../node_modules/@mlightcad/libredwg-web/wasm/libredwg-web.wasm?url';
 import { parseDxf } from './dxf-parser.js';
+import { parseDgn } from '../formats/dgn.js';
+import { parseHpgl } from '../formats/hpgl.js';
 
 let libPromise = null;
 function libredwg() {
@@ -16,6 +18,10 @@ self.onmessage = async (ev) => {
     let db;
     if (kind === 'dxf') {
       db = parseDxf(buffer);
+    } else if (kind === 'dgn') {
+      db = parseDgn(buffer);
+    } else if (kind === 'hpgl') {
+      db = parseHpgl(buffer);
     } else {
       const lib = await libredwg();
       const data = lib.dwg_read_data(buffer, Dwg_File_Type.DWG);
@@ -27,6 +33,6 @@ self.onmessage = async (ev) => {
     delete db.thumbnailImage;
     self.postMessage({ id, ok: true, db });
   } catch (err) {
-    self.postMessage({ id, ok: false, error: String(err?.message || err) });
+    self.postMessage({ id, ok: false, error: String(err?.message || err), hint: err?.hint ?? null });
   }
 };

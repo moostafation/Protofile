@@ -540,7 +540,9 @@ const HANDLERS = {
   },
   INSERT(e, ctx) {
     const st = this.style(e, ctx, ctx.m);
-    const block = this.d.blocks.get(e.name);
+    // `blockName` lets several references share a display name (DGN cells) but not geometry.
+    const blockName = e.blockName ?? e.name;
+    const block = this.d.blocks.get(blockName);
     const base = block?.base ?? { x: 0, y: 0 };
     const ocs = ocsMatrix(e.extrusionDirection);
     const cols = Math.max(1, e.columnCount || 1), rows = Math.max(1, e.rowCount || 1);
@@ -553,7 +555,7 @@ const HANDLERS = {
         local = mul(local, translate(-base.x, -base.y));
         local = mul(translate(e.insertionPoint.x, e.insertionPoint.y), local);
         const m = mul(ctx.m, mul(ocs, local));
-        this.insertBlock(e.name, m, ctx, st, ctx.depth);
+        this.insertBlock(blockName, m, ctx, st, ctx.depth);
       }
     }
     for (const a of e.attribs ?? []) this.entity(a, { ...ctx, layer: ctx.layer, rgb: st.rgb, lw: st.lw, ltype: st.ltype });
