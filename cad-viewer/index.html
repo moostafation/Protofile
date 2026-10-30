@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#14171c" />
+  <meta name="description" content="ProtoCAD Viewer: view AutoCAD DWG/DXF and PDF files, measure, print to PDF and ask an AI assistant about the drawing." />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <title>ProtoCAD Viewer</title>
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand">
+        <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="3" y="3" width="26" height="26" rx="6" fill="#ff9f1c"/><path d="M9 22 L16 9 L23 22 Z" fill="none" stroke="#14171c" stroke-width="2.4" stroke-linejoin="round"/><circle cx="16" cy="18" r="2.4" fill="#14171c"/></svg>
+        <span class="brand-name">ProtoCAD</span>
+      </div>
+      <button class="tb primary" data-action="open" data-i18n-title="open"><i data-icon="open"></i><span data-i18n="open"></span></button>
+      <div class="tb-group" data-needs="doc">
+        <button class="tb" data-action="extents" data-i18n-title="zoomExtents"><i data-icon="extents"></i></button>
+        <button class="tb" data-action="zoomWindow" data-i18n-title="zoomWindow"><i data-icon="zoomWindow"></i></button>
+        <button class="tb hide-sm" data-action="zoomIn" data-i18n-title="zoomIn"><i data-icon="zoomIn"></i></button>
+        <button class="tb hide-sm" data-action="zoomOut" data-i18n-title="zoomOut"><i data-icon="zoomOut"></i></button>
+      </div>
+      <div class="tb-group" data-needs="doc">
+        <button class="tb" data-action="select" data-tool="select" data-i18n-title="select"><i data-icon="select"></i></button>
+        <div class="menu-wrap">
+          <button class="tb" data-action="measureMenu" data-tool="measure" data-i18n-title="measure"><i data-icon="measure"></i><span class="hide-sm" data-i18n="measure"></span></button>
+          <div class="menu" id="measureMenu" hidden>
+            <button data-action="measure:dist"><i data-icon="ruler"></i><span data-i18n="measureDist"></span></button>
+            <button data-action="measure:path"><i data-icon="path"></i><span data-i18n="measurePath"></span></button>
+            <button data-action="measure:area"><i data-icon="area"></i><span data-i18n="measureArea"></span></button>
+            <button data-action="measure:calibrate" data-needs="pdf"><i data-icon="calibrate"></i><span data-i18n="calibrate"></span></button>
+            <hr />
+            <label class="menu-check"><input type="checkbox" id="snapToggle" checked /><span data-i18n="snap"></span></label>
+            <button data-action="measure:clear"><i data-icon="trash"></i><span data-i18n="measureClear"></span></button>
+          </div>
+        </div>
+      </div>
+      <div class="spacer"></div>
+      <div class="tb-group" data-needs="doc">
+        <button class="tb" data-action="print" data-i18n-title="print"><i data-icon="print"></i><span class="hide-sm" data-i18n="print"></span></button>
+        <button class="tb ai-btn" data-action="ai" data-i18n-title="ai"><i data-icon="sparkle"></i><span class="hide-sm" data-i18n="ai"></span></button>
+      </div>
+      <button class="tb" data-action="settings" data-i18n-title="settings"><i data-icon="settings"></i></button>
+      <button class="tb lang" data-action="lang"><span data-i18n="language"></span></button>
+    </header>
+
+    <div class="workspace">
+      <aside class="sidebar" id="sidebar" data-needs="doc">
+        <nav class="tabs" id="sideTabs">
+          <button data-tab="layers" data-needs="cad"><i data-icon="layers"></i><span data-i18n="layers"></span></button>
+          <button data-tab="blocks" data-needs="cad"><i data-icon="blocks"></i><span data-i18n="blocks"></span></button>
+          <button data-tab="pages" data-needs="pdf"><i data-icon="pages"></i><span data-i18n="pages"></span></button>
+          <button data-tab="search"><i data-icon="search"></i><span data-i18n="search"></span></button>
+          <button data-tab="info"><i data-icon="info"></i><span data-i18n="info"></span></button>
+        </nav>
+        <section class="tab-panel" data-panel="layers">
+          <div class="panel-tools">
+            <input type="search" id="layerFilter" data-i18n-placeholder="filter" />
+            <button class="mini" data-action="layersAll" data-i18n="showAll"></button>
+            <button class="mini" data-action="layersNone" data-i18n="hideAll"></button>
+          </div>
+          <ul class="list" id="layerList"></ul>
+          <div class="panel-foot"><button class="mini" data-action="layersCsv"><i data-icon="download"></i><span data-i18n="exportCsv"></span></button></div>
+        </section>
+        <section class="tab-panel" data-panel="blocks">
+          <ul class="list" id="blockList"></ul>
+          <div class="panel-foot"><button class="mini" data-action="bomCsv"><i data-icon="download"></i><span>BOM </span><span data-i18n="exportCsv"></span></button></div>
+        </section>
+        <section class="tab-panel" data-panel="pages">
+          <div class="thumbs" id="thumbs"></div>
+        </section>
+        <section class="tab-panel" data-panel="search">
+          <div class="panel-tools"><input type="search" id="searchInput" data-i18n-placeholder="searchPlaceholder" /></div>
+          <div class="muted small" id="searchCount"></div>
+          <ul class="list" id="searchList"></ul>
+        </section>
+        <section class="tab-panel" data-panel="info">
+          <dl class="props" id="infoList"></dl>
+        </section>
+      </aside>
+
+      <main class="stage" id="stage">
+        <div class="viewport" id="viewport"></div>
+        <div class="welcome" id="welcome">
+          <div class="welcome-card">
+            <svg class="welcome-logo" viewBox="0 0 32 32" aria-hidden="true"><rect x="3" y="3" width="26" height="26" rx="6" fill="#ff9f1c"/><path d="M9 22 L16 9 L23 22 Z" fill="none" stroke="#14171c" stroke-width="2.4" stroke-linejoin="round"/><circle cx="16" cy="18" r="2.4" fill="#14171c"/></svg>
+            <h1>ProtoCAD Viewer</h1>
+            <p class="lead" data-i18n="tagline"></p>
+            <p data-i18n="openHint"></p>
+            <div class="welcome-actions">
+              <button class="btn primary" data-action="open"><i data-icon="open"></i><span data-i18n="open"></span></button>
+              <button class="btn" data-action="sample"><i data-icon="blocks"></i><span data-i18n="sample"></span></button>
+            </div>
+            <p class="muted small" data-i18n="formats"></p>
+            <p class="muted small" data-i18n="privacy"></p>
+          </div>
+        </div>
+        <div class="drop-hint" id="dropHint"><span data-i18n="dropHere"></span></div>
+        <div class="loading" id="loading" hidden><div class="spinner"></div><span id="loadingText"></span></div>
+        <div class="toast" id="toast" hidden></div>
+        <div class="bottom-bar" data-needs="doc">
+          <div class="space-tabs" id="spaceTabs"></div>
+          <div class="status" id="status"></div>
+        </div>
+        <button class="fab sidebar-toggle" data-action="toggleSidebar" data-needs="doc"><i data-icon="layers"></i></button>
+      </main>
+
+      <aside class="rightbar" id="rightbar" hidden>
+        <div class="right-head">
+          <nav class="tabs" id="rightTabs">
+            <button data-rtab="props"><i data-icon="info"></i><span data-i18n="properties"></span></button>
+            <button data-rtab="ai"><i data-icon="sparkle"></i><span data-i18n="ai"></span></button>
+          </nav>
+          <button class="icon-btn" data-action="closeRight" data-i18n-title="close"><i data-icon="close"></i></button>
+        </div>
+        <section class="rpanel" data-rpanel="props">
+          <dl class="props" id="propList"></dl>
+        </section>
+        <section class="rpanel ai" data-rpanel="ai">
+          <div class="ai-log" id="aiLog"></div>
+          <div class="ai-quick" id="aiQuick"></div>
+          <form class="ai-form" id="aiForm">
+            <textarea id="aiInput" rows="2" data-i18n-placeholder="aiPlaceholder"></textarea>
+            <div class="ai-row">
+              <label class="check"><input type="checkbox" id="aiView" checked /><span data-i18n="aiIncludeView"></span></label>
+              <span class="spacer"></span>
+              <button type="button" class="mini" data-action="aiNew" data-i18n="aiNew"></button>
+              <button type="submit" class="btn primary small" id="aiSend"><span data-i18n="aiSend"></span></button>
+            </div>
+          </form>
+        </section>
+      </aside>
+    </div>
+  </div>
+
+  <dialog id="printDialog" class="dialog wide">
+    <form method="dialog" class="dialog-body">
+      <h2 data-i18n="printTitle"></h2>
+      <div class="print-grid">
+        <div class="print-options" id="printOptions">
+          <label><span data-i18n="paper"></span><select id="pPaper"></select></label>
+          <label><span data-i18n="orientation"></span>
+            <select id="pOrient"><option value="auto" data-i18n="auto"></option><option value="landscape" data-i18n="landscape"></option><option value="portrait" data-i18n="portrait"></option></select></label>
+          <label><span data-i18n="plotArea"></span>
+            <select id="pArea"><option value="extents" data-i18n="areaExtents"></option><option value="view" data-i18n="areaView"></option><option value="window" data-i18n="areaWindow"></option></select></label>
+          <label><span data-i18n="scaleLabel"></span>
+            <select id="pScale"></select></label>
+          <label><span data-i18n="colorMode"></span>
+            <select id="pColor"><option value="mono" data-i18n="colorMono"></option><option value="color" data-i18n="colorColor"></option><option value="gray" data-i18n="colorGray"></option></select></label>
+          <label class="check"><input type="checkbox" id="pLw" checked /><span data-i18n="plotLineweights"></span></label>
+          <label class="check"><input type="checkbox" id="pStamp" checked /><span data-i18n="stamp"></span></label>
+        </div>
+        <div class="print-preview"><canvas id="pPreview"></canvas><div class="muted small" id="pInfo"></div></div>
+      </div>
+      <div class="pdf-print" id="pdfPrint" hidden><p data-i18n="pdfPrintHint"></p></div>
+      <div class="dialog-actions">
+        <button value="cancel" class="btn" data-i18n="cancel"></button>
+        <span class="spacer"></span>
+        <button type="button" class="btn" id="pDownload"><i data-icon="download"></i><span data-i18n="downloadPdf"></span></button>
+        <button type="button" class="btn primary" id="pPrint"><i data-icon="print"></i><span data-i18n="printNow"></span></button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="settingsDialog" class="dialog">
+    <form method="dialog" class="dialog-body">
+      <h2 data-i18n="settings"></h2>
+      <label><span data-i18n="theme"></span>
+        <select id="sTheme"><option value="dark" data-i18n="themeDark"></option><option value="light" data-i18n="themeLight"></option><option value="mono" data-i18n="themeMono"></option></select></label>
+      <label class="check"><input type="checkbox" id="sLw" /><span data-i18n="lineweights"></span></label>
+      <hr />
+      <h3><i data-icon="sparkle"></i> <span data-i18n="aiTitle"></span></h3>
+      <label><span data-i18n="apiKey"></span><input type="password" id="sKey" autocomplete="off" placeholder="sk-ant-…" dir="ltr" /></label>
+      <p class="muted small" data-i18n="apiKeyHint"></p>
+      <label><span data-i18n="aiModel"></span>
+        <select id="sModel" dir="ltr">
+          <option value="claude-opus-5-5">Claude Opus 5.5</option>
+          <option value="claude-sonnet-5-5">Claude Sonnet 5.5</option>
+          <option value="claude-fable-5-1">Claude Fable 5.1</option>
+        </select></label>
+      <label><span data-i18n="aiEffort"></span>
+        <select id="sEffort"><option value="low" data-i18n="effortLow"></option><option value="medium" data-i18n="effortMedium"></option><option value="high" data-i18n="effortHigh"></option></select></label>
+      <div class="dialog-actions">
+        <button value="cancel" class="btn" data-i18n="cancel"></button>
+        <span class="spacer"></span>
+        <button value="save" class="btn primary" id="sSave" data-i18n="save"></button>
+      </div>
+    </form>
+  </dialog>
+
+  <input type="file" id="fileInput" accept=".dwg,.dxf,.pdf,application/pdf" hidden />
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
