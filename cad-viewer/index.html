@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ar" dir="rtl">
+<html lang="en" dir="ltr">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
@@ -16,7 +16,7 @@
         <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="3" y="3" width="26" height="26" rx="6" fill="#ff9f1c"/><path d="M9 22 L16 9 L23 22 Z" fill="none" stroke="#14171c" stroke-width="2.4" stroke-linejoin="round"/><circle cx="16" cy="18" r="2.4" fill="#14171c"/></svg>
         <span class="brand-name">ProtoCAD</span>
       </div>
-      <button class="tb primary" data-action="open" data-i18n-title="open"><i data-icon="open"></i><span data-i18n="open"></span></button>
+      <button class="tb primary" data-action="open" data-i18n-title="open"><i data-icon="open"></i><span class="hide-sm" data-i18n="open"></span></button>
       <div class="tb-group" data-needs="doc">
         <button class="tb" data-action="extents" data-i18n-title="zoomExtents"><i data-icon="extents"></i></button>
         <button class="tb" data-action="zoomWindow" data-i18n-title="zoomWindow"><i data-icon="zoomWindow"></i></button>
@@ -44,7 +44,6 @@
         <button class="tb ai-btn" data-action="ai" data-i18n-title="ai"><i data-icon="sparkle"></i><span class="hide-sm" data-i18n="ai"></span></button>
       </div>
       <button class="tb" data-action="settings" data-i18n-title="settings"><i data-icon="settings"></i></button>
-      <button class="tb lang" data-action="lang"><span data-i18n="language"></span></button>
     </header>
 
     <div class="workspace">
@@ -58,7 +57,7 @@
         </nav>
         <section class="tab-panel" data-panel="layers">
           <div class="panel-tools">
-            <input type="search" id="layerFilter" data-i18n-placeholder="filter" />
+            <input type="search" id="layerFilter" dir="auto" data-i18n-placeholder="filter" />
             <button class="mini" data-action="layersAll" data-i18n="showAll"></button>
             <button class="mini" data-action="layersNone" data-i18n="hideAll"></button>
           </div>
@@ -73,7 +72,7 @@
           <div class="thumbs" id="thumbs"></div>
         </section>
         <section class="tab-panel" data-panel="search">
-          <div class="panel-tools"><input type="search" id="searchInput" data-i18n-placeholder="searchPlaceholder" /></div>
+          <div class="panel-tools"><input type="search" id="searchInput" dir="auto" data-i18n-placeholder="searchPlaceholder" /></div>
           <div class="muted small" id="searchCount"></div>
           <ul class="list" id="searchList"></ul>
         </section>
@@ -123,7 +122,7 @@
           <div class="ai-log" id="aiLog"></div>
           <div class="ai-quick" id="aiQuick"></div>
           <form class="ai-form" id="aiForm">
-            <textarea id="aiInput" rows="2" data-i18n-placeholder="aiPlaceholder"></textarea>
+            <textarea id="aiInput" rows="2" dir="auto" data-i18n-placeholder="aiPlaceholder"></textarea>
             <div class="ai-row">
               <label class="check"><input type="checkbox" id="aiView" checked /><span data-i18n="aiIncludeView"></span></label>
               <span class="spacer"></span>

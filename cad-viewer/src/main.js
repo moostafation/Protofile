@@ -1,5 +1,5 @@
 import './styles.css';
-import { t, getLang, setLang } from './i18n.js';
+import { t } from './i18n.js';
 import { fillIcons, icon } from './ui/icons.js';
 import { renderMarkdown } from './ui/markdown.js';
 import { Viewer } from './render/viewer.js';
@@ -49,7 +49,8 @@ const state = {
 
 const viewer = new Viewer($('#viewport'), {
   onCursor: (w) => updateStatus(w),
-  onView: () => {},
+  // Keep the zoom % (and the coordinates under a still cursor) current while zooming.
+  onView: () => updateStatus(viewer.cursor ? viewer.screenToWorld(...viewer.cursor) : null),
   drawOverlay: (o, v) => drawOverlay(o, v),
 });
 
@@ -108,15 +109,12 @@ function measureUnits() {
   return { factor: 1, unit: UNIT_NAMES[units] || '' };
 }
 
-// ---------------------------------------------------------------- i18n / chrome
+// ---------------------------------------------------------------- UI text / chrome
 function applyI18n() {
-  const lang = getLang();
-  document.documentElement.lang = lang;
-  document.documentElement.dir = lang === 'ar' ? 'rtl' : 'ltr';
   for (const el of $$('[data-i18n]')) el.textContent = t(el.dataset.i18n);
   for (const el of $$('[data-i18n-title]')) { el.title = t(el.dataset.i18nTitle); el.setAttribute('aria-label', el.title); }
   for (const el of $$('[data-i18n-placeholder]')) el.placeholder = t(el.dataset.i18nPlaceholder);
-  $('#formatsText').textContent = supportedGroups().map((g) => `${t('fmt_' + g.category)}: ${g.labels.join(getLang() === 'ar' ? '، ' : ', ')}`).join(' · ');
+  $('#formatsText').textContent = supportedGroups().map((g) => `${t('fmt_' + g.category)}: ${g.labels.join(', ')}`).join(' · ');
   buildQuickPrompts();
 }
 
@@ -204,6 +202,7 @@ function resetDocState() {
   state.pdfHits = [];
   state.measures.length = 0;
   state.sheetScale = null;
+  showProperties();
   assistant.reset();
   $('#aiLog').innerHTML = '';
   $('#searchInput').value = '';
@@ -474,8 +473,7 @@ function buildSpaceTabs() {
     const pdf = doc.sheet;
     const wrap = document.createElement('span');
     wrap.className = 'pager';
-    const rtl = getLang() === 'ar';
-    wrap.innerHTML = `<button data-p="-1">${icon(rtl ? 'next' : 'prev')}</button><span>${t('page')} ${pdf.pageNo} ${t('of')} ${pdf.pageCount}</span><button data-p="1">${icon(rtl ? 'prev' : 'next')}</button>`;
+    wrap.innerHTML = `<button data-p="-1">${icon('prev')}</button><span>${t('page')} ${pdf.pageNo} ${t('of')} ${pdf.pageCount}</span><button data-p="1">${icon('next')}</button>`;
     wrap.addEventListener('click', (ev) => {
       const b = ev.target.closest('button');
       if (b) gotoPage(pdf.pageNo + Number(b.dataset.p));
@@ -764,10 +762,12 @@ async function sendAi(text, includeView) {
   if (!log.children.length) showAiIntro();
   const user = document.createElement('div');
   user.className = 'msg user';
+  user.dir = 'auto'; // questions and answers may be in Arabic
   user.textContent = text;
   log.append(user);
   const bot = document.createElement('div');
   bot.className = 'msg bot';
+  bot.dir = 'auto';
   bot.innerHTML = `<span class="thinking">${t('aiThinking')}</span>`;
   log.append(bot);
   bot.scrollIntoView({ block: 'end' });
@@ -1052,15 +1052,6 @@ function onAction(action, el) {
     case 'ai': openRight('ai'); break;
     case 'closeRight': closeRight(); break;
     case 'settings': openSettings(); break;
-    case 'lang':
-      setLang(getLang() === 'ar' ? 'en' : 'ar');
-      applyI18n();
-      if (state.doc?.kind === 'cad') { state.doc.spaces[0].name = t('model'); buildBlockPanel(); }
-      buildSpaceTabs();
-      buildInfoPanel();
-      showProperties();
-      setTool(currentTool);
-      break;
     case 'layersAll': state.hidden.clear(); layersChanged(); break;
     case 'layersNone': state.hidden = new Set(state.doc.drawing.layers.keys()); layersChanged(); break;
     case 'layersCsv': {
@@ -1098,9 +1089,7 @@ function toggleMenu(btn) {
   menu.hidden = false;
   const r = btn.getBoundingClientRect();
   menu.style.top = `${r.bottom + 4}px`;
-  const rtl = document.documentElement.dir === 'rtl';
-  const left = rtl ? r.right - menu.offsetWidth : r.left;
-  menu.style.left = `${Math.max(8, Math.min(left, window.innerWidth - menu.offsetWidth - 8))}px`;
+  menu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8))}px`;
 }
 function closeMenus() { $('#measureMenu').hidden = true; }
 

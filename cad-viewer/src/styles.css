@@ -70,7 +70,6 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .tb.primary { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
 .tb.primary:hover { filter: brightness(1.08); }
 .tb.ai-btn { color: #c4b5fd; }
-.tb.lang { font-size: 13px; color: var(--muted); }
 .tb i, .btn i, .mini i, .tabs i, .icon-btn i, .menu i, .fab i { display: inline-flex; width: 18px; height: 18px; }
 .tb svg, .btn svg, .mini svg, .tabs svg, .icon-btn svg, .menu svg, .fab svg { width: 18px; height: 18px; }
 .spacer { flex: 1; }
@@ -254,7 +253,6 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
     position: absolute; top: 0; bottom: 0; z-index: 25; box-shadow: var(--shadow); width: min(340px, 88vw);
   }
   .sidebar { inset-inline-start: 0; transform: translateX(-105%); transition: transform 0.2s; }
-  [dir="rtl"] .sidebar { transform: translateX(105%); }
   .sidebar.open { transform: none !important; }
   .rightbar { inset-inline-end: 0; width: min(420px, 100vw); }
   .fab {

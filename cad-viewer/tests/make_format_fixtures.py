@@ -205,6 +205,9 @@ def make_2d():
     w.text(40, (0.5, 9.0), 'PLANT ROOM', 0.4, complex=True, color=0)
     w.text(40, (0.5, 8.4), 'CHW PUMPS', 0.25, complex=True, color=0)
     w.text(41, (6.5, 2.4), 'CHWS 150', 0.2, rot=30, color=2)
+    # B-spline curve: header (order 4, 4 poles) followed by its pole element.
+    w.elem(27, 25, i32(0) + bytes([2, 0]) + struct.pack('<HH', 4, 0), color=3)
+    w.linestring(25, [(0.5, 3.5), (1.0, 5.0), (1.5, 3.5), (2.0, 5.0)], etype=21, complex=True, color=3)
     # A point (zero-length line) and an unsupported dimension element.
     w.line(42, (11.5, 0.5), (11.5, 0.5), color=7)
     w.elem(33, 43, b'\0' * 20)

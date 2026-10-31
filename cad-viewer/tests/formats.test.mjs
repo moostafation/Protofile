@@ -80,7 +80,10 @@ test('plant-v7.dgn: elements, cells, colour table, units', () => {
   near(Math.atan2(ells[0].majorAxisEndPoint.y, ells[0].majorAxisEndPoint.x), Math.PI / 6);
   near(Math.hypot(ells[1].majorAxisEndPoint.x, ells[1].majorAxisEndPoint.y), 1);
   near(ells[1].axisRatio, 0.5);
-  assert.equal(byType(db, 'SPLINE').length, 1, 'curve element');
+  const [curve, bspline] = byType(db, 'SPLINE');
+  assert.equal(curve.fitPoints.length, 4, 'curve element: interior vertices');
+  assert.equal(bspline.degree, 3);
+  assert.deepEqual(bspline.controlPoints.map((p) => [p.x, p.y]), [[0.5, 3.5], [1, 5], [1.5, 3.5], [2, 5]]);
   // Complex chain line+arc+linestring becomes one open polyline; complex shape closed + filled.
   const chain = byType(db, 'LWPOLYLINE').find((e) => e.layer === 'Level 23');
   assert.equal(chain.flag & 1, 0);

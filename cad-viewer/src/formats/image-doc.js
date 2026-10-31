@@ -313,7 +313,7 @@ export class ImageDocument {
   async thumbnail(n, width = 140) {
     if (this.format === 'TIFF' && n !== this.pageNo) {
       const { img, w, h } = this.decodeTiffPage(n, 4e6);
-      return downscale(img, width, (width * h) / w);
+      return downscale(img, width * 2, (width * 2 * h) / w);
     }
     return this.pageImage(width * 2);
   }
