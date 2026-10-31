@@ -191,6 +191,7 @@ async function openFile(file) {
       if (!current()) return;
       setCadDoc(result.drawing);
       if (result.drawing.warnings.includes('truncated')) toast(t('fileTruncated'), false, 7000);
+      if (result.drawing.warnings.includes('limit')) toast(t('fileTooLarge'), false, 7000);
     } else {
       setSheetDoc(result.kind, result.sheet);
     }
@@ -237,6 +238,8 @@ function resetDocState() {
   assistant.reset();
   $('#aiLog').innerHTML = '';
   $('#searchInput').value = '';
+  // Keys typed after opening a file should reach the viewer, not a search box focused for the old one.
+  if (document.activeElement === $('#searchInput')) $('#searchInput').blur();
   $('#searchList').innerHTML = '';
   $('#searchCount').textContent = '';
 }
@@ -477,7 +480,8 @@ function buildInfoPanel() {
       [t('extents'), `(${formatNum(x0 + o.x)}, ${formatNum(y0 + o.y)}) – (${formatNum(x1 + o.x)}, ${formatNum(y1 + o.y)})`],
       [t('size'), `${formatNum(x1 - x0)} × ${formatNum(y1 - y0)} ${unit === '-' ? '' : unit}`],
       [t('entities'), String(sp.scene.items.length)], [t('layers'), String(d.layers.size)],
-      [t('blocks'), String([...d.blocks.keys()].filter((n) => !n.startsWith('*')).length)],
+      // DGN cells are stored as anonymous blocks, so count the cell names in use instead.
+      [t('blocks'), String(d.source === 'dgn' ? sp.analysis.blocks.length : [...d.blocks.keys()].filter((n) => !n.startsWith('*')).length)],
       ['Layouts', d.layouts.map((l) => l.name).join(', ') || '-']);
     if (sp.scene.warnings.length) rows.push([t('warnings'), sp.scene.warnings.slice(0, 12).join(', ')]);
   } else if (doc?.kind === 'pdf') {
@@ -1018,7 +1022,8 @@ function updatePrintPreview() {
   const a = plan.area;
   if (sp) {
     ctx.setTransform(s * plan.k, 0, 0, -s * plan.k, s * (plan.ox - a[0] * plan.k), s * (plan.oy + a[3] * plan.k));
-    const theme = o.colorMode === 'color' ? { bg: '#ffffff', fg: '#000000', mono: false } : { bg: '#ffffff', fg: '#000000', mono: true };
+    // The preview shows the plot's real colours (the PDF keeps them too).
+    const theme = o.colorMode === 'color' ? { bg: '#ffffff', fg: '#000000', mono: false, trueColor: true } : { bg: '#ffffff', fg: '#000000', mono: true };
     const vb = [a[0] - (plan.ox / plan.k), a[1] - plan.pageH / plan.k, a[2] + plan.pageW / plan.k, a[3] + plan.oy / plan.k];
     sp.renderer.draw(ctx, { scale: s * plan.k / dpr, bounds: vb, dpr }, { theme, hidden: isHidden, showLw: o.lineweights, model: sp.isLayout ? state.doc.spaces[0].renderer : null });
   } else {
@@ -1037,6 +1042,8 @@ function updatePrintPreview() {
   }
   const scale = sp ? ` · ${t('scaleLabel')} ${plan.scaleLabel}` : '';
   $('#pInfo').textContent = `${o.paper} ${plan.landscape ? t('landscape') : t('portrait')} · ${Math.round(plan.pageW)}×${Math.round(plan.pageH)} mm${scale}`;
+  $('#pInfo').classList.toggle('warn', !plan.fits);
+  if (!plan.fits) $('#pInfo').textContent += ` · ${t('printTooBig')}`;
 }
 
 function makePlotPdf() {

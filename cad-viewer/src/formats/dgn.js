@@ -52,6 +52,9 @@ const STYLE_PATTERNS = {
   5: [2, -1.5], 6: [6, -1.5, 0, -1.5, 0, -1.5], 7: [8, -1.5, 3, -1.5],
 };
 
+// Deeper cell nesting is flattened (the scene draws block references up to 16 levels deep).
+const MAX_NEST = 12;
+
 const UNIT_CODES = { M: 6, MM: 4, CM: 5, KM: 7, FT: 2, "'": 2, IN: 1, '"': 1, MI: 3, YD: 10, DM: 14 };
 
 // Graphic element types that are recognised but not drawn (reported as warnings).
@@ -450,6 +453,8 @@ class DgnReader {
   }
 
   cell(els, i, out, depth) {
+    // Too deep: skip this header so its members are read as members of the enclosing cell.
+    if (depth >= MAX_NEST) return i + 1;
     const el = els[i], b = this.b, o = el.off;
     // A top-level cell runs until the next element without the complex bit. Nested cells
     // use their length word (writers disagree on whether it counts the header's attributes).
@@ -489,12 +494,17 @@ class DgnReader {
       j++;
     }
     if (poles.length < 2) return j;
-    if (closed) poles = poles.concat(poles.slice(0, order - 1));
+    const degree = Math.min(order - 1, poles.length - 1);
+    if (weights && weights.length !== poles.length) weights = null;
+    let knots = [];
+    if (closed) {
+      // Periodic curve: wrap `degree` poles and use an unclamped uniform knot vector.
+      poles = poles.concat(poles.slice(0, degree));
+      if (weights) weights = weights.concat(weights.slice(0, degree));
+      knots = Array.from({ length: poles.length + degree + 1 }, (_, k) => k);
+    }
     const e = this.base(el, 'SPLINE');
-    Object.assign(e, {
-      degree: Math.min(order - 1, poles.length - 1), controlPoints: poles, fitPoints: [], knots: [],
-      weights: weights && weights.length === poles.length ? weights : [], flag: closed ? 1 : 0,
-    });
+    Object.assign(e, { degree, controlPoints: poles, fitPoints: [], knots, weights: weights || [], flag: closed ? 1 : 0 });
     out.push(e);
     return j;
   }

@@ -6,6 +6,8 @@ import { FormatError } from './errors.js';
 const PLU_PER_MM = 40;
 const DEG = Math.PI / 180;
 const ETX = '\x03';
+const MAX_VERTICES = 4e6; // a damaged or hostile file must not exhaust memory
+const DEFAULT_CHAR_RATIO = 0.19 / 0.27; // default SI width / height
 
 // HP-GL/2 default palette: 0 white, 1 black, 2 red, 3 green, 4 yellow, 5 blue, 6 magenta, 7 cyan.
 const PALETTE = [0xffffff, 0x000000, 0xff0000, 0x00ff00, 0xffff00, 0x0000ff, 0xff00ff, 0x00ffff];
@@ -21,12 +23,17 @@ const LINE_TYPES = {
  * (ESC%#B enters HP-GL/2, ESC%#A returns to PCL; PCL binary payloads are skipped).
  */
 export function extractHpgl(bytes) {
+  return extract(bytes).text;
+}
+
+function extract(bytes) {
   const n = bytes.length;
   let i = 0;
   while (i < n && (bytes[i] <= 32)) i++;
   const startsPcl = bytes[i] === 0x1b && bytes[i + 1] !== 0x2e;
   const startsPjl = bytes[i] === 0x40 && bytes[i + 1] === 0x50; // "@P"
   let hpgl = !(startsPcl || startsPjl);
+  let pcl = false; // HP-GL/2 entered from PCL (ESC%#B)
   const chunks = [];
   let chunkStart = hpgl ? i : -1;
   const flush = (end) => {
@@ -38,7 +45,7 @@ export function extractHpgl(bytes) {
     if (c === 0x1b) {
       if (hpgl) flush(i);
       const esc = readEscape(bytes, i);
-      if (esc.enterHpgl) hpgl = true;
+      if (esc.enterHpgl) { hpgl = true; pcl = true; }
       else if (esc.leaveHpgl) hpgl = false;
       i = esc.next;
       if (hpgl) chunkStart = i;
@@ -56,7 +63,7 @@ export function extractHpgl(bytes) {
     i++;
   }
   if (hpgl) flush(n);
-  return chunks.join(';');
+  return { text: chunks.join(';'), pcl };
 }
 
 function latin1(bytes, a, b) {
@@ -181,6 +188,8 @@ class Plotter {
     this.isHpgl2 = false;
     this.handle = 0;
     this.page = 0;
+    this.vertices = 0;
+    this.full = false;
     this.reset();
   }
 
@@ -191,6 +200,8 @@ class Plotter {
     this.pen = 1;
     this.p1 = [0, 0]; this.p2 = [10365, 7962];
     this.sc = null;
+    this.scParams = null;
+    this.ro = 0;
     this.lt = null;
     this.width = new Map();
     this.defaultWidth = 0.35;
@@ -219,6 +230,7 @@ class Plotter {
   }
 
   setScale(p) {
+    this.scParams = p.length >= 4 ? p : null;
     if (p.length < 4) { this.sc = null; return; }
     const [xmin, a, ymin, b, type = 0, left = 50, bottom = 50] = p;
     const [P1x, P1y] = this.p1, [P2x, P2y] = this.p2;
@@ -244,7 +256,7 @@ class Plotter {
   penInfo(pen) {
     let info = this.pens.get(pen);
     if (!info) {
-      info = { rgb: this.colors[pen < 8 ? pen : ((pen - 1) % 7) + 1] ?? 0, width: this.penWidth(pen) };
+      info = { rgb: this.penColor(pen), width: this.penWidth(pen) };
       this.pens.set(pen, info);
     }
     return info;
@@ -254,11 +266,33 @@ class Plotter {
     return this.width.get(pen) ?? this.defaultWidth;
   }
 
+  /** Current colour of a pen: set by PC, else the default palette (repeating for pens 8+). */
+  penColor(pen) {
+    return this.colors[pen] ?? PALETTE[((pen - 1) % 7) + 1];
+  }
+
+  /** Plotter-unit point to a drawing vertex in mm, applying the RO rotation. */
+  vert(x, y, bulge = 0) {
+    const r = this.ro;
+    const [px, py] = r === 90 ? [-y, x] : r === 180 ? [-x, -y] : r === 270 ? [y, -x] : [x, y];
+    return { x: px / PLU_PER_MM, y: py / PLU_PER_MM, bulge };
+  }
+
+  /** Counts vertices against the budget; false once the file is too large to keep drawing. */
+  budget(n) {
+    this.vertices += n;
+    if (this.vertices > MAX_VERTICES) this.full = true;
+    return !this.full;
+  }
+
   base(type) {
     const layer = `PEN ${this.pen}`;
     this.penInfo(this.pen);
+    // The colour is fixed when drawn, so a later PC does not recolour earlier geometry.
+    const rgb = this.penColor(this.pen);
+    const fg = rgb === 0 || rgb === 0xffffff;
     return {
-      type, handle: (++this.handle).toString(16).toUpperCase(), layer, colorIndex: 256,
+      type, handle: (++this.handle).toString(16).toUpperCase(), layer, colorIndex: fg ? 7 : 256, color: fg ? undefined : rgb,
       lineweight: Math.max(5, Math.round(this.penWidth(this.pen) * 100)), lineTypeScale: 1, isVisible: true, page: this.page,
     };
   }
@@ -279,17 +313,17 @@ class Plotter {
 
   /** Starts or extends the current pen-down path. */
   lineTo(x, y, bulge = 0) {
-    if (this.pen === 0 && !this.poly) { this.x = x; this.y = y; return; }
+    if ((this.pen === 0 && !this.poly) || !this.budget(1)) { this.x = x; this.y = y; return; }
     if (this.poly) {
       const ring = this.poly.ring;
-      if (!ring.length) ring.push({ x: this.x / PLU_PER_MM, y: this.y / PLU_PER_MM, bulge: 0 });
+      if (!ring.length) ring.push(this.vert(this.x, this.y));
       ring[ring.length - 1].bulge = bulge;
-      ring.push({ x: x / PLU_PER_MM, y: y / PLU_PER_MM, bulge: 0 });
+      ring.push(this.vert(x, y));
     } else {
-      if (!this.path) this.path = [{ x: this.x / PLU_PER_MM, y: this.y / PLU_PER_MM, bulge: 0 }];
+      if (!this.path) this.path = [this.vert(this.x, this.y)];
       const p = this.path;
       p[p.length - 1].bulge = bulge;
-      p.push({ x: x / PLU_PER_MM, y: y / PLU_PER_MM, bulge: 0 });
+      p.push(this.vert(x, y));
     }
     this.x = x; this.y = y;
   }
@@ -339,6 +373,7 @@ class Plotter {
   /** Arc around plotter-space centre (cx, cy) by `sweep` degrees from the current point. */
   arcTo(cx, cy, sweepDeg, draw) {
     const r = Math.hypot(this.x - cx, this.y - cy);
+    sweepDeg = Math.max(-360, Math.min(360, sweepDeg));
     if (!(r > 0) || !sweepDeg) return;
     const mirror = this.sc && this.sc.sx * this.sc.sy < 0 ? -1 : 1;
     const sweep = sweepDeg * DEG * mirror;
@@ -355,9 +390,9 @@ class Plotter {
 
   circle(r) {
     const R = Math.abs(this.relPlot(r, 0)[0]);
-    if (!(R > 0) || (this.pen === 0 && !this.poly)) return;
+    if (!(R > 0) || (this.pen === 0 && !this.poly) || !this.budget(2)) return;
     if (this.poly) {
-      const ring = [{ x: (this.x + R) / PLU_PER_MM, y: this.y / PLU_PER_MM, bulge: 1 }, { x: (this.x - R) / PLU_PER_MM, y: this.y / PLU_PER_MM, bulge: 1 }];
+      const ring = [this.vert(this.x + R, this.y, 1), this.vert(this.x - R, this.y, 1)];
       if (this.poly.ring.length > 1) this.poly.rings.push(this.poly.ring);
       this.poly.rings.push(ring);
       this.poly.ring = [];
@@ -365,7 +400,8 @@ class Plotter {
     }
     this.flushPath();
     const e = this.base('CIRCLE');
-    e.center = { x: this.x / PLU_PER_MM, y: this.y / PLU_PER_MM, z: 0 };
+    e.center = { ...this.vert(this.x, this.y), z: 0 };
+    delete e.center.bulge;
     e.radius = R / PLU_PER_MM;
     e.lineType = this.lineTypeName();
     this.entities.push(e);
@@ -373,9 +409,9 @@ class Plotter {
 
   /** Closed ring (plotter units) drawn as outline or filled. */
   shape(ring, filled) {
-    if (this.pen === 0) return;
+    if (this.pen === 0 || !this.budget(ring.length)) return;
     this.flushPath();
-    const verts = ring.map(([x, y, bulge = 0]) => ({ x: x / PLU_PER_MM, y: y / PLU_PER_MM, bulge }));
+    const verts = ring.map(([x, y, bulge = 0]) => this.vert(x, y, bulge));
     if (filled) this.fillRings([verts]);
     else {
       const e = this.base('LWPOLYLINE');
@@ -409,6 +445,9 @@ class Plotter {
   }
 
   wedge(r, start, sweep, filled) {
+    // A negative radius draws the wedge on the opposite side.
+    if (r < 0) { r = -r; start += 180; }
+    sweep = Math.max(-360, Math.min(360, sweep));
     const [R] = this.relPlot(r, 0);
     const cx = this.x, cy = this.y;
     const ring = [[cx, cy]];
@@ -421,34 +460,33 @@ class Plotter {
   }
 
   label(text) {
-    if (this.poly || this.pen === 0) return;
+    // Labels in polygon mode or with pen 0 draw nothing, but the pen still moves past them.
+    const draw = !this.poly && this.pen !== 0 && this.budget(1);
     this.flushPath();
     const lines = text.replace(/\r\n?/g, '\r').split(/[\r\n]/);
-    const h = this.charH / PLU_PER_MM, w = this.charW / PLU_PER_MM;
+    const h = this.charH, w = this.charW; // plotter units
     const c = Math.cos(this.dir), s = Math.sin(this.dir);
     const lo = this.lo % 10 || 1;
     const col = Math.floor((lo - 1) / 3), row = (lo - 1) % 3; // col: left/centre/right, row: bottom/middle/top
-    let x0 = this.x / PLU_PER_MM, y0 = this.y / PLU_PER_MM;
-    lines.forEach((line, k) => {
+    const x0 = this.x, y0 = this.y;
+    if (draw) lines.forEach((line, k) => {
       const str = line.replace(/[\x00-\x1f]/g, '');
-      if (str.trim()) {
-        const off = k * 2 * h; // character cells are twice the cap height
-        const px = x0 + s * off, py = y0 - c * off;
-        const e = this.base('TEXT');
-        Object.assign(e, {
-          text: str, textHeight: h, rotation: this.dir, xScale: 1,
-          halign: col, valign: row === 0 ? 0 : row === 1 ? 2 : 3,
-          startPoint: { x: px, y: py, z: 0 }, endPoint: { x: px, y: py, z: 0 },
-        });
-        this.entities.push(e);
-      }
+      if (!str.trim()) return;
+      const off = k * 2 * h; // character cells are twice the cap height
+      const { x, y } = this.vert(x0 + s * off, y0 - c * off);
+      const e = this.base('TEXT');
+      Object.assign(e, {
+        text: str, textHeight: h / PLU_PER_MM, rotation: this.dir + this.ro * DEG, xScale: w / h / DEFAULT_CHAR_RATIO,
+        halign: col, valign: row === 0 ? 0 : row === 1 ? 2 : 3,
+        startPoint: { x, y, z: 0 }, endPoint: { x, y, z: 0 },
+      });
+      this.entities.push(e);
     });
     // The pen ends after the last character (character cells are 1.5 × the width).
-    const last = lines[lines.length - 1].length;
-    const adv = col === 0 ? last * 1.5 * w : 0;
+    const adv = col === 0 ? lines[lines.length - 1].length * 1.5 * w : 0;
     const off = (lines.length - 1) * 2 * h;
-    this.x = (x0 + c * adv + s * off) * PLU_PER_MM;
-    this.y = (y0 + s * adv - c * off) * PLU_PER_MM;
+    this.x = x0 + c * adv + s * off;
+    this.y = y0 + s * adv - c * off;
   }
 
   // ---------- polyline encoded (PE) ----------
@@ -529,11 +567,16 @@ class Plotter {
       case 'PD': this.down = true; this.plotPoints(p); break;
       case 'PA': this.abs = true; this.plotPoints(p); break;
       case 'PR': this.abs = false; this.plotPoints(p); break;
-      case 'IP':
+      case 'IP': {
+        // With only P1 given, P2 keeps its offset from the previous P1. Scaling follows the new points.
+        const dx = this.p2[0] - this.p1[0], dy = this.p2[1] - this.p1[1];
         this.p1 = p.length >= 2 ? [p[0], p[1]] : [0, 0];
-        this.p2 = p.length >= 4 ? [p[2], p[3]] : p.length >= 2 ? [p[0] + (this.p2[0] - this.p1[0]), p[1] + (this.p2[1] - this.p1[1])] : [10365, 7962];
+        this.p2 = p.length >= 4 ? [p[2], p[3]] : p.length >= 2 ? [p[0] + dx, p[1] + dy] : [10365, 7962];
+        if (this.scParams) this.setScale(this.scParams);
         break;
+      }
       case 'SC': this.setScale(p); break;
+      case 'RO': this.flushPath(); this.ro = [90, 180, 270].includes(Math.round(p[0] ?? 0)) ? Math.round(p[0]) : 0; break;
       case 'CI': if (p.length) this.circle(p[0]); break;
       case 'AA': case 'AR': {
         if (p.length < 3) break;
@@ -597,7 +640,6 @@ class Plotter {
         }
         break;
       case 'PW': {
-        this.isHpgl2 = true;
         this.flushPath();
         let w = p[0] ?? 0.35;
         if (this.relWidth) w = (w / 100) * Math.hypot(this.p2[0] - this.p1[0], this.p2[1] - this.p1[1]) / PLU_PER_MM;
@@ -606,20 +648,23 @@ class Plotter {
         for (const [pen, info] of this.pens) info.width = this.penWidth(pen);
         break;
       }
-      case 'WU': this.relWidth = p[0] === 1; break;
+      case 'WU': this.isHpgl2 = true; this.relWidth = p[0] === 1; break;
       case 'PC': {
+        this.isHpgl2 = true;
+        this.flushPath(); // the open path keeps the colour it was drawn with
         if (p.length >= 4) {
           const [r0, r1, g0, g1, b0, b1] = this.colorRange;
           const k = (v, a, b) => Math.max(0, Math.min(255, Math.round(((v - a) / (b - a || 1)) * 255)));
           const rgb = (k(p[1], r0, r1) << 16) | (k(p[2], g0, g1) << 8) | k(p[3], b0, b1);
           const pen = Math.round(p[0]);
           this.colors[pen] = rgb;
-          if (this.pens.has(pen)) this.pens.get(pen).rgb = rgb;
         }
         break;
       }
-      case 'CR': if (p.length >= 6) this.colorRange = p.slice(0, 6); break;
-      case 'DI': case 'DR': this.dir = p.length >= 2 && (p[0] || p[1]) ? Math.atan2(p[1], p[0]) : 0; break;
+      case 'CR': this.isHpgl2 = true; if (p.length >= 6) this.colorRange = p.slice(0, 6); break;
+      case 'DI': this.dir = p.length >= 2 && (p[0] || p[1]) ? Math.atan2(p[1], p[0]) : 0; break;
+      // DR: run and rise are percentages of the P1-P2 width and height.
+      case 'DR': this.dir = p.length >= 2 && (p[0] || p[1]) ? Math.atan2(p[1] * (this.p2[1] - this.p1[1]), p[0] * (this.p2[0] - this.p1[0])) : 0; break;
       case 'SI': if (p.length >= 2) { this.charW = p[0] * 400; this.charH = p[1] * 400; } break;
       case 'SR': {
         const w = p.length >= 2 ? p[0] : 0.75, h = p.length >= 2 ? p[1] : 1.5;
@@ -689,15 +734,17 @@ function forEachPoint(e, fn) {
 /** Parses an HP-GL / HP-GL/2 file (ArrayBuffer) into a DwgDatabase-like object. */
 export function parseHpgl(buffer) {
   const bytes = new Uint8Array(buffer);
-  const text = extractHpgl(bytes);
+  const { text, pcl } = extract(bytes);
   // Binary data (a mislabelled or damaged file) would otherwise produce random strokes.
   let control = 0;
   for (let k = 0; k < text.length; k++) {
     const c = text.charCodeAt(k);
-    if (c < 9 || (c > 13 && c < 32 && c !== 27 && c !== 3)) control++;
+    // ETX (3) ends labels and ESC (27) starts escapes; other control bytes are suspicious.
+    if ((c < 9 && c !== 3) || (c > 13 && c < 32 && c !== 27)) control++;
   }
   if (control > text.length * 0.02) throw new FormatError('This file does not look like an HP-GL plot file.');
   const plotter = new Plotter();
+  plotter.isHpgl2 = pcl;
   plotter.run(new Lexer(text));
   const entities = plotter.entities;
   if (!entities.length) throw new FormatError('No HP-GL drawing instructions were found in this file.');
@@ -714,6 +761,7 @@ export function parseHpgl(buffer) {
   return {
     source: 'hpgl',
     header: { ACADVER: plotter.isHpgl2 ? 'HP-GL/2' : 'HP-GL', INSUNITS: 4 },
+    warnings: plotter.full ? ['limit'] : [],
     tables: { LAYER: { entries: layers }, LTYPE: { entries: [...plotter.ltypes.values()] }, STYLE: { entries: [] }, BLOCK_RECORD: { entries: [] } },
     objects: { LAYOUT: [] },
     entities,

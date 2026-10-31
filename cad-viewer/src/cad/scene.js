@@ -519,7 +519,7 @@ const HANDLERS = {
     } else {
       pts = sampleThrough(e.fitPoints ?? [], 16);
     }
-    this.stroke(ctx, st, pts, false, ctx.m);
+    this.stroke(ctx, st, pts, !!((e.flag ?? 0) & 1), ctx.m);
   },
   TEXT(e, ctx) {
     const st = this.style(e, ctx, ctx.m);

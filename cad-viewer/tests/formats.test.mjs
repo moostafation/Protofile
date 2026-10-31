@@ -10,6 +10,7 @@ import { parseHpgl } from '../src/formats/hpgl.js';
 import { FormatError } from '../src/formats/errors.js';
 import { formatFor, resolveFormat, acceptAttribute, openableExtensions, FORMATS } from '../src/formats/registry.js';
 import { buildDrawing } from '../src/cad/drawing.js';
+import { parseDxf } from '../src/cad/dxf-parser.js';
 import { buildScene, STROKE, TEXT, FILL } from '../src/cad/scene.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -195,6 +196,72 @@ test('Space separators, scaling, polygon fill, three-point arc, 7-bit PE', () =>
 test('Binary or empty input is rejected', () => {
   assert.throws(() => parseHpgl(new Uint8Array([0, 1, 2, 3, 0, 0, 5, 80, 68, 0, 0, 0, 0]).buffer), FormatError);
   assert.throws(() => parseHpgl(bytes('IN;SP1;')), FormatError);
+});
+
+test('HP-GL review fixes: pen colours, clamps, RO, IP/SC, wedges, labels', () => {
+  const colors = parseHpgl(bytes('IN;PC10,255,0,0;SP10;PU0,0;PD400,0;PC10,0,0,255;PU0,400;PD400,400;PU;'));
+  assert.deepEqual(byType(colors, 'LWPOLYLINE').map((e) => e.color), [0xff0000, 0x0000ff], 'colour fixed when drawn, pens 8+ use PC');
+  assert.equal(colors.tables.LAYER.entries[0].color, 0xff0000);
+  const huge = parseHpgl(bytes('IN;SP1;PU0,0;EW100,0,36000000;PU100,0;PD;AA0,0,3600000;PU;'));
+  assert.ok(huge.entities.every((e) => (e.vertices?.length ?? 0) < 200), 'sweeps clamped to 360°');
+  const ro = parseHpgl(bytes('IN;RO90;SP1;PU0,0;PD400,0;'));
+  near(byType(ro, 'LWPOLYLINE')[0].vertices[1].x, 0); near(byType(ro, 'LWPOLYLINE')[0].vertices[1].y, 10);
+  const ip = parseHpgl(bytes('IN;IP0,0,4000,4000;SC0,100,0,100;IP1000,1000;PU0,0;PD100,100;'));
+  assert.deepEqual(byType(ip, 'LWPOLYLINE')[0].vertices.map((v) => [v.x, v.y]), [[25, 25], [125, 125]], 'IP moves P2 with P1 and SC follows');
+  const wedge = parseHpgl(bytes('IN;SP1;PU0,0;EW-100,0,90;'));
+  near(byType(wedge, 'LWPOLYLINE')[0].vertices[1].x, -2.5);
+  const pen0 = parseHpgl(bytes('IN;SI0.19,0.27;SP0;PU0,0;LBABC\x03SP1;PD400,0;'));
+  near(byType(pen0, 'LWPOLYLINE')[0].vertices[0].x, 8.55, 1e-9);
+  const labels = parseHpgl(bytes('IN;SP1;' + 'PU0,0;LBA\x03'.repeat(200)));
+  assert.equal(byType(labels, 'TEXT').length, 200, 'label terminators are not treated as binary data');
+  assert.equal(parseHpgl(fixture('plot-hpgl1.plt')).header.ACADVER, 'HP-GL');
+});
+
+console.log('DGN review fixes');
+test('closed B-spline is periodic and closed; deep cell nesting is flattened', () => {
+  const tcb = new Uint8Array(1536); tcb.set([0x08, 0x09, 0xfe, 0x02]);
+  const elem = (type, body, complex) => {
+    const b = [...body]; if (b.length % 2) b.push(0);
+    const size = 36 + b.length, h = new Array(36).fill(0);
+    h[0] = 1 | (complex ? 0x80 : 0); h[1] = type; h[2] = ((size - 4) / 2) & 255; h[3] = (size - 4) >> 9;
+    h[30] = ((36 + b.length - 32) / 2) & 255;
+    return [...h, ...b];
+  };
+  const i32 = (v) => [(v >>> 16) & 255, (v >>> 24) & 255, v & 255, (v >>> 8) & 255];
+  const poles = [[0, 0], [1000, 0], [1000, 1000], [0, 1000]];
+  const spline = [...elem(27, [0, 0, 0, 0, 0x82, 0, 4, 0, 0, 0]), ...elem(21, [4, 0, ...poles.flatMap(([x, y]) => [...i32(x), ...i32(y)])], true)];
+  const db = parseDgn(new Uint8Array([...tcb, ...spline, 0xff, 0xff]).buffer);
+  const [sp] = byType(db, 'SPLINE');
+  assert.equal(sp.flag & 1, 1);
+  assert.equal(sp.controlPoints.length, 7);
+  assert.equal(sp.knots.length, 11);
+  const { scene: s } = scene(db, 'dgn');
+  const p = s.prims[0];
+  assert.ok(p.closed, 'closed stroke');
+  near(p.pts[0], p.pts[p.pts.length - 2], 1e-6); near(p.pts[1], p.pts[p.pts.length - 1], 1e-6);
+  // 3000 nested cells (each claiming a huge length) must not overflow the stack.
+  const cell = (complex) => { const c = elem(2, new Array(56).fill(0), complex); c[36] = 0xff; c[37] = 0xff; return c; };
+  const parts = [...tcb, ...cell(false)];
+  for (let i = 0; i < 3000; i++) parts.push(...cell(true));
+  parts.push(...elem(3, [...i32(0), ...i32(0), ...i32(10), ...i32(10)], true), 0xff, 0xff);
+  const nested = parseDgn(new Uint8Array(parts).buffer);
+  assert.equal(nested.entities.length, 1);
+  scene(nested, 'dgn');
+});
+
+console.log('DXF review fixes');
+test('DXF sniffing, missing sections and truncation', () => {
+  const dxf = '  0\nSECTION\n  2\nENTITIES\n  0\nLINE\n  8\n0\n 10\n0\n 20\n0\n 11\n10\n 21\n0\n  0\nENDSEC\n  0\nEOF\n';
+  const enc = (s) => new TextEncoder().encode(s);
+  assert.equal(resolveFormat('plan.dwg', enc(dxf)).id, 'dxf', 'DXF named .dwg');
+  assert.equal(resolveFormat('noext', enc('999\ncomment\n' + dxf)).id, 'dxf');
+  assert.equal(resolveFormat('plot.plt', enc(dxf)).id, 'dxf');
+  assert.deepEqual(parseDxf(enc(dxf).buffer).warnings, []);
+  const cut = parseDxf(enc(dxf.slice(0, dxf.indexOf('  0\nENDSEC'))).buffer);
+  assert.deepEqual(cut.warnings, ['truncated']);
+  assert.equal(cut.entities.length, 1, 'what was read is kept');
+  assert.throws(() => parseDxf(enc('just some text\n').buffer), FormatError);
+  assert.throws(() => parseDxf(new ArrayBuffer(0)), FormatError);
 });
 
 console.log('Registry');

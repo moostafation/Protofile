@@ -56,7 +56,8 @@ export function planPlot(scene, units, o) {
   // Centre the area on the printable region.
   const ox = m + (availW - aw * k) / 2;
   const oy = m + (availH - ah * k) / 2;
-  return { pageW, pageH, k, area, ox, oy, margin: m, stampH: stamp, scaleLabel, landscape };
+  const fits = aw * k <= availW * 1.001 && ah * k <= availH * 1.001;
+  return { pageW, pageH, k, area, ox, oy, margin: m, stampH: stamp, scaleLabel, landscape, fits };
 }
 
 class PdfPainter {

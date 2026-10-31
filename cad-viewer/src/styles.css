@@ -242,6 +242,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 .dialog label:not(.check) > :is(select, input) { color: var(--text); }
 .dialog hr { border: 0; border-top: 1px solid var(--line); width: 100%; }
 .dialog .small { padding: 0; }
+#pInfo.warn { color: #f59e0b; }
 .cal-row { display: grid; grid-template-columns: 1fr 96px; gap: 10px; align-items: end; }
 .unsupported-text { margin: 0; line-height: 1.7; white-space: pre-line; }
 .dialog-actions { display: flex; gap: 8px; align-items: center; margin-top: 6px; flex-wrap: wrap; }

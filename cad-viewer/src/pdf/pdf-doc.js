@@ -39,7 +39,8 @@ export class PdfDocument {
     this.task?.cancel();
     this.task = null;
     this.base = this.cache = null;
-    this.pdf.destroy().catch(() => {});
+    // pdf.js frees a document through the task that loaded it (also stops its worker).
+    this.pdf.loadingTask?.destroy().catch(() => {});
   }
 
   async setPage(n) {

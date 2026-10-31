@@ -6,7 +6,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node tests/scene.test.mjs public/samples/plant.dxf && node tests/formats.test.mjs"
+    "test": "node tests/scene.test.mjs public/samples/plant.dxf && node tests/formats.test.mjs && node tests/pdf-text.test.mjs"
   },
   "keywords": [],
   "author": "",

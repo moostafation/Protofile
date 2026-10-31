@@ -25,6 +25,11 @@ function label(o, x, y, text, color = MEASURE) {
   const lines = text.split('\n');
   const w = Math.max(...lines.map((l) => o.measureText(l).width)) + 10;
   const h = lines.length * 16 + 6;
+  // Keep the label inside the canvas (o is scaled by dpr, so its CSS size is width / scale).
+  const k = o.getTransform().a || 1;
+  const W = o.canvas.width / k, H = o.canvas.height / k;
+  x = Math.max(-4, Math.min(x, W - w - 12));
+  y = Math.max(h + 10, Math.min(y, H - 4));
   o.fillStyle = 'rgba(15,18,24,0.88)';
   o.strokeStyle = color;
   o.lineWidth = 1;

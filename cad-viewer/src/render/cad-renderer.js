@@ -1,6 +1,6 @@
 // Canvas 2D renderer for a CAD scene. Primitives are grouped into spatial tiles
 // and, inside a tile, into Path2D batches that share layer and style.
-import { FOREGROUND } from '../cad/aci.js';
+import { FOREGROUND, luminance } from '../cad/aci.js';
 import { LW_DEFAULT } from '../cad/drawing.js';
 import { STROKE, FILL, TEXT, HATCH, POINT, VPORT } from '../cad/scene.js';
 
@@ -21,10 +21,28 @@ export function measureText(s) {
   return measureCtx.measureText(s).width / 100;
 }
 
+const MAX_LUMA_ON_LIGHT = 0.55;
+const darkened = new Map();
+
+/** CSS colour of a primitive. On light backgrounds very light colours (ACI yellow, green, cyan…) are darkened to stay readable, unless `theme.trueColor`. */
 export function colorCss(rgb, theme) {
   if (theme.mono) return theme.fg;
   if (rgb === FOREGROUND) return theme.fg;
+  if (!theme.trueColor && isLight(theme.bg)) {
+    let css = darkened.get(rgb);
+    if (!css) {
+      const k = Math.min(1, MAX_LUMA_ON_LIGHT / Math.max(luminance(rgb), 1e-6));
+      const r = Math.round(((rgb >> 16) & 255) * k), g = Math.round(((rgb >> 8) & 255) * k), b = Math.round((rgb & 255) * k);
+      darkened.set(rgb, (css = `rgb(${r},${g},${b})`));
+    }
+    return css;
+  }
   return '#' + rgb.toString(16).padStart(6, '0');
+}
+
+function isLight(bg) {
+  const v = /^#[0-9a-f]{6}$/i.test(bg || '') ? parseInt(bg.slice(1), 16) : 0;
+  return luminance(v) > 0.6;
 }
 
 function lwPx(lw) {

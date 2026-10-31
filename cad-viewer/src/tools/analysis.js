@@ -78,12 +78,24 @@ export function analyze(drawing, scene) {
   }
 
   // Texts nested inside blocks (e.g. tags drawn as plain text) are searchable too.
+  // Entries are looked up per item, so drawings with many blocks stay fast.
+  const byItem = new Map();
+  for (const s of searchable) {
+    let arr = byItem.get(s.item);
+    if (!arr) byItem.set(s.item, (arr = []));
+    arr.push(s.text);
+  }
   for (const p of scene.prims) {
     if (p.k !== TEXT) continue;
     const it = scene.items[p.item];
     if (it.ent.type === 'INSERT') {
       const t = p.lines.map((l) => l.s).join(' ');
-      if (t.trim() && !searchable.some((s) => s.item === it.id && s.text.includes(t))) searchable.push({ item: it.id, kind: 'block-text', text: t });
+      if (!t.trim()) continue;
+      let arr = byItem.get(it.id);
+      if (arr?.some((s) => s.includes(t))) continue;
+      if (!arr) byItem.set(it.id, (arr = []));
+      arr.push(t);
+      searchable.push({ item: it.id, kind: 'block-text', text: t });
     }
   }
 
