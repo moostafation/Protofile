@@ -221,7 +221,8 @@ export class Assistant {
       }
       onEvent({ type: 'done' });
     } catch (err) {
-      onEvent({ type: 'error', code: errorCode(err), message: err?.message });
+      // API errors carry a JSON body; show its message rather than the raw text.
+      onEvent({ type: 'error', code: errorCode(err), message: err?.error?.error?.message || err?.message });
       // Remove the unfinished turn (it may end in an unanswered tool call) so the next question starts cleanly.
       this.messages.length = turnStart;
       if (!this.messages.length) this.docKey = null;
@@ -238,6 +239,7 @@ function errorCode(err) {
   if (err instanceof Anthropic.PermissionDeniedError) return 'permission';
   if (err instanceof Anthropic.NotFoundError) return 'model';
   if (err instanceof Anthropic.RateLimitError) return 'rate';
+  if (err instanceof Anthropic.APIError && (err.status === 529 || err.status >= 500 || err?.error?.error?.type === 'overloaded_error')) return 'overloaded';
   if (err instanceof Anthropic.BadRequestError) return 'bad-request';
   if (err instanceof Anthropic.APIConnectionError) return 'network';
   if (err instanceof Anthropic.APIError) return 'api';

@@ -3,6 +3,8 @@
 // Angles are converted to radians and lineweights are left in 1/100 mm
 // (the normalizer knows the difference through `source: 'dxf'`).
 
+import { FormatError } from '../formats/errors.js';
+
 const DEG = Math.PI / 180;
 
 function decode(buffer) {
@@ -563,6 +565,7 @@ export function parseDxf(buffer) {
   };
   const blocks = new Map(); // name -> record
   const recordByHandle = new Map();
+  const sections = new Set();
 
   let i = 0;
   const n = codes.length;
@@ -576,6 +579,7 @@ export function parseDxf(buffer) {
   while (i < n) {
     if (codes[i] !== 0 || values[i] !== 'SECTION') { i++; continue; }
     const section = values[i + 1];
+    sections.add(section);
     i += 2;
     if (section === 'HEADER') {
       let name = null;
@@ -728,6 +732,14 @@ export function parseDxf(buffer) {
       while (i < n && !(codes[i] === 0 && values[i] === 'ENDSEC')) i++;
     }
   }
+
+  if (!sections.has('ENTITIES') && !sections.has('BLOCKS')) {
+    throw new FormatError('This is not a readable DXF file (no ENTITIES or BLOCKS section was found).');
+  }
+  // A complete file ends with "0 / EOF"; without it the file was cut off, but what was read is kept.
+  let last = codes.length - 1;
+  while (last >= 0 && codes[last] !== 0) last--;
+  db.warnings = last >= 0 && values[last].trim() === 'EOF' ? [] : ['truncated'];
 
   // Entities from the ENTITIES section belong to model space unless flagged as paper space.
   const model = [...blocks.values()].find((b) => /^\*model_space$/i.test(b.name));

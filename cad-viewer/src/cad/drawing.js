@@ -130,6 +130,7 @@ export function buildDrawing(db, source, fileName) {
   const header = db.header ?? {};
   return {
     tableBlocks,
+    warnings: db.warnings ?? [],
     source,
     fileName,
     header,

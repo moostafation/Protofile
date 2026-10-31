@@ -149,7 +149,8 @@ export class MeasureTool {
   key(ev) {
     if (ev.key === 'Enter') { this.finish(); return true; }
     if (ev.key === 'Backspace') { this.points.pop(); return true; }
-    if (ev.key === 'Escape') { this.points = []; return true; }
+    // Esc drops the points being placed; with none placed it is left to the app (back to Select).
+    if (ev.key === 'Escape') { if (!this.points.length) return false; this.points = []; return true; }
     return false;
   }
 

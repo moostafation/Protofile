@@ -49,11 +49,11 @@
     <div class="workspace">
       <aside class="sidebar" id="sidebar" data-needs="doc">
         <nav class="tabs" id="sideTabs">
-          <button data-tab="layers" data-needs="cad"><i data-icon="layers"></i><span data-i18n="layers"></span></button>
-          <button data-tab="blocks" data-needs="cad"><i data-icon="blocks"></i><span data-i18n="blocks"></span></button>
-          <button data-tab="pages" data-needs="sheet"><i data-icon="pages"></i><span data-i18n="pages"></span></button>
-          <button data-tab="search"><i data-icon="search"></i><span data-i18n="search"></span></button>
-          <button data-tab="info"><i data-icon="info"></i><span data-i18n="info"></span></button>
+          <button data-tab="layers" data-i18n-title="layers" data-needs="cad"><i data-icon="layers"></i><span data-i18n="layers"></span></button>
+          <button data-tab="blocks" data-i18n-title="blocks" data-needs="cad"><i data-icon="blocks"></i><span data-i18n="blocks"></span></button>
+          <button data-tab="pages" data-i18n-title="pages" data-needs="sheet"><i data-icon="pages"></i><span data-i18n="pages"></span></button>
+          <button data-tab="search" data-i18n-title="search"><i data-icon="search"></i><span data-i18n="search"></span></button>
+          <button data-tab="info" data-i18n-title="info"><i data-icon="info"></i><span data-i18n="info"></span></button>
         </nav>
         <section class="tab-panel" data-panel="layers">
           <div class="panel-tools">
@@ -105,6 +105,7 @@
           <div class="status" id="status"></div>
         </div>
         <button class="fab sidebar-toggle" data-action="toggleSidebar" data-needs="doc"><i data-icon="layers"></i></button>
+        <button class="fab props-fab" id="propsFab" data-action="showProps" hidden><i data-icon="info"></i><span data-i18n="properties"></span></button>
       </main>
 
       <aside class="rightbar" id="rightbar" hidden>
@@ -145,6 +146,8 @@
             <select id="pOrient"><option value="auto" data-i18n="auto"></option><option value="landscape" data-i18n="landscape"></option><option value="portrait" data-i18n="portrait"></option></select></label>
           <label><span data-i18n="plotArea"></span>
             <select id="pArea"><option value="extents" data-i18n="areaExtents"></option><option value="view" data-i18n="areaView"></option><option value="window" data-i18n="areaWindow"></option></select></label>
+          <label data-print="pages"><span data-i18n="pages"></span>
+            <select id="pPages"><option value="current" data-i18n="pagesCurrent"></option><option value="all" data-i18n="pagesAll"></option></select></label>
           <label data-print="cad"><span data-i18n="scaleLabel"></span>
             <select id="pScale"></select></label>
           <label data-print="cad"><span data-i18n="colorMode"></span>
@@ -160,6 +163,23 @@
         <span class="spacer"></span>
         <button type="button" class="btn" id="pDownload"><i data-icon="download"></i><span data-i18n="downloadPdf"></span></button>
         <button type="button" class="btn primary" id="pPrint"><i data-icon="print"></i><span data-i18n="printNow"></span></button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="calibrateDialog" class="dialog">
+    <form method="dialog" class="dialog-body">
+      <h2 data-i18n="calibrate"></h2>
+      <p class="muted small" id="calInfo"></p>
+      <div class="cal-row">
+        <label><span data-i18n="realDistance"></span><input type="number" id="calValue" min="0.000001" step="any" required inputmode="decimal" /></label>
+        <label><span data-i18n="units"></span>
+          <select id="calUnit"><option value="mm">mm</option><option value="cm">cm</option><option value="m">m</option><option value="in">in</option><option value="ft">ft</option></select></label>
+      </div>
+      <div class="dialog-actions">
+        <button value="cancel" class="btn" formnovalidate data-i18n="cancel"></button>
+        <span class="spacer"></span>
+        <button value="ok" class="btn primary" data-i18n="apply"></button>
       </div>
     </form>
   </dialog>

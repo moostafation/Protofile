@@ -268,21 +268,36 @@ function titleStrip(doc, plan, o, info) {
  * @returns {jsPDF}
  */
 export function exportImagePdf(sheet, o) {
-  const plan = planPlot(null, 0, { ...o, scaleMode: 'fit' });
-  const doc = new jsPDF({ unit: 'mm', format: [plan.pageW, plan.pageH], orientation: plan.landscape ? 'landscape' : 'portrait', compress: true });
-  doc.setProperties({ title: o.title || 'Image', creator: 'ProtoCAD Viewer' });
-  const a = plan.area;
-  const wmm = (a[2] - a[0]) * plan.k, hmm = (a[3] - a[1]) * plan.k;
-  // About 300 dpi on paper; rasters are never enlarged beyond their own pixels.
-  let pw = (wmm / 25.4) * 300, ph = (hmm / 25.4) * 300;
-  let k = Math.min(1, Math.sqrt(36e6 / (pw * ph)), 12000 / Math.max(pw, ph));
-  if (sheet.format !== 'SVG') k = Math.min(k, (a[2] - a[0]) / pw);
-  pw = Math.max(1, Math.round(pw * k));
-  ph = Math.max(1, Math.round(ph * k));
-  const canvas = sheet.renderArea(a, pw, ph);
   const photo = sheet.format === 'JPEG' || sheet.format === 'WEBP';
-  doc.addImage(canvas, photo ? 'JPEG' : 'PNG', plan.ox, plan.oy, wmm, hmm, undefined, 'FAST');
-  if (o.stamp) titleStrip(doc, plan, o, `${sheet.format} ${Math.round(a[2] - a[0])}×${Math.round(a[3] - a[1])} px   ${o.paper}`);
+  let doc = null;
+  const pages = o.pages === 'all' ? Array.from({ length: sheet.pageCount }, (_, i) => i + 1) : [sheet.pageNo];
+  for (const n of pages) {
+    // "All pages" prints every page whole; the current page can use a view or window area.
+    const whole = n !== sheet.pageNo || o.pages === 'all';
+    let area = o.area, canvas = null;
+    if (whole && n !== sheet.pageNo) {
+      const page = sheet.pageCanvas(n, 16e6);
+      canvas = page.canvas;
+      area = [0, 0, page.w, page.h];
+    } else if (whole) area = sheet.bbox;
+    const plan = planPlot(null, 0, { ...o, area, scaleMode: 'fit' });
+    const format = [plan.pageW, plan.pageH], orientation = plan.landscape ? 'landscape' : 'portrait';
+    if (!doc) {
+      doc = new jsPDF({ unit: 'mm', format, orientation, compress: true });
+      doc.setProperties({ title: o.title || 'Image', creator: 'ProtoCAD Viewer' });
+    } else doc.addPage(format, orientation);
+    const a = plan.area;
+    const wmm = (a[2] - a[0]) * plan.k, hmm = (a[3] - a[1]) * plan.k;
+    if (!canvas) {
+      // About 300 dpi on paper (at most 16 megapixels); rasters are never enlarged beyond their own pixels.
+      let pw = (wmm / 25.4) * 300, ph = (hmm / 25.4) * 300;
+      let k = Math.min(1, Math.sqrt(16e6 / (pw * ph)));
+      if (sheet.format !== 'SVG') k = Math.min(k, (a[2] - a[0]) / pw);
+      canvas = sheet.renderArea(a, Math.max(1, pw * k), Math.max(1, ph * k));
+    }
+    doc.addImage(canvas, photo ? 'JPEG' : 'PNG', plan.ox, plan.oy, wmm, hmm, undefined, 'FAST');
+    if (o.stamp) titleStrip(doc, plan, { ...o, title: pages.length > 1 ? `${o.title}  (${n}/${sheet.pageCount})` : o.title }, `${sheet.format} ${Math.round(a[2] - a[0])}×${Math.round(a[3] - a[1])} px   ${o.paper}`);
+  }
   return doc;
 }
 

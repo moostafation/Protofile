@@ -5,7 +5,7 @@ import { renderMarkdown } from './ui/markdown.js';
 import { Viewer } from './render/viewer.js';
 import { CadRenderer, measureText, colorCss } from './render/cad-renderer.js';
 import { PAPERS, exportPdf, exportImagePdf, planPlot } from './render/pdf-export.js';
-import { resolveFormat, openBuffer, acceptAttribute, supportedGroups, formatFor } from './formats/registry.js';
+import { resolveFormat, openBuffer, acceptAttribute, supportedGroups, formatFor, SNIFF_BYTES } from './formats/registry.js';
 import { FormatError } from './formats/errors.js';
 import { buildScene, STROKE } from './cad/scene.js';
 import { UNIT_NAMES } from './cad/drawing.js';
@@ -90,21 +90,39 @@ const measureEnv = {
   },
   units: () => measureUnits(),
   onDone: () => viewer.renderOverlay(),
-  onCalibrate: (pts) => {
-    const d = Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]);
-    const v = parseFloat((prompt(t('realDistance')) || '').replace(',', '.'));
-    if (d > 0 && v > 0) {
-      state.sheetScale = { factor: v / d, unit: 'm' };
-      toast(`${t('pdfScale')}: 1 ${activeSheet()?.unit === 'px' ? 'px' : 'pt'} = ${(v / d).toFixed(5)} m`);
+  onCalibrate: (pts) => openCalibration(Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1])),
+};
+
+/** Asks for the real distance between the two calibration points (value + unit). */
+function openCalibration(d) {
+  const dlg = $('#calibrateDialog');
+  const cur = measureUnits();
+  $('#calInfo').textContent = `${t('calMeasured')}: ${formatLength(d * cur.factor, cur.unit)}`;
+  $('#calValue').value = '';
+  try { $('#calUnit').value = localStorage.getItem('protocad.calUnit') || 'm'; } catch { $('#calUnit').value = 'm'; }
+  dlg.returnValue = '';
+  dlg.onclose = () => {
+    const v = parseFloat($('#calValue').value);
+    const unit = $('#calUnit').value;
+    if (dlg.returnValue === 'ok' && d > 0 && v > 0 && Number.isFinite(v)) {
+      try { localStorage.setItem('protocad.calUnit', unit); } catch { /* storage unavailable */ }
+      state.sheetScale = { factor: v / d, unit };
+      toast(`${t('pdfScale')}: 1 ${activeSheet()?.unit || 'pt'} = ${(v / d).toPrecision(5)} ${unit}`);
       buildInfoPanel();
+      viewer.renderOverlay();
     }
     setTool('select');
-  },
-};
+  };
+  dlg.showModal();
+  $('#calValue').focus();
+}
 
 function measureUnits() {
   if (state.doc?.kind === 'pdf') return state.sheetScale || { factor: 25.4 / 72, unit: 'mm' };
-  if (state.doc?.kind === 'image') return state.sheetScale || { factor: 1, unit: 'px' };
+  if (state.doc?.kind === 'image') {
+    const mm = state.doc.sheet.mmPerUnit; // from the file's DPI or SVG size, when present
+    return state.sheetScale || (mm ? { factor: mm, unit: 'mm' } : { factor: 1, unit: 'px' });
+  }
   const units = state.doc?.drawing?.units;
   return { factor: 1, unit: UNIT_NAMES[units] || '' };
 }
@@ -148,35 +166,44 @@ const nextFrame = () => new Promise((r) => requestAnimationFrame(() => setTimeou
  * Opens any File-like object ({ name, arrayBuffer() }): picker, drag & drop, OS file handling.
  * The format comes from the registry (extension, corrected by the file's first bytes).
  */
+let openSeq = 0;
 async function openFile(file) {
+  // The last file chosen wins: results of earlier, slower loads are dropped.
+  const my = ++openSeq;
+  const current = () => my === openSeq;
   const name = file.name || 'drawing';
   const known = formatFor(name);
   if (known?.category === 'unsupported') { showUnsupported(known.hint, known.label); return; }
   showLoading(t('loading'));
   try {
     const buffer = await file.arrayBuffer();
-    const format = resolveFormat(name, new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 16)));
+    if (!current()) return;
+    const format = resolveFormat(name, new Uint8Array(buffer, 0, Math.min(buffer.byteLength, SNIFF_BYTES)));
     if (!format) {
       toast(t('unsupported'), true, 6000);
       return;
     }
     const result = await openBuffer(format, buffer, name);
+    if (!current()) { result.sheet?.dispose?.(); return; }
     if (result.kind === 'cad') {
       showLoading(t('building'));
       await nextFrame();
+      if (!current()) return;
       setCadDoc(result.drawing);
+      if (result.drawing.warnings.includes('truncated')) toast(t('fileTruncated'), false, 7000);
     } else {
       setSheetDoc(result.kind, result.sheet);
     }
     document.title = `${name} – ProtoCAD Viewer`;
   } catch (err) {
+    if (!current()) return;
     // Unreadable files are expected; only unexpected failures are logged as errors.
     if (err instanceof FormatError) console.warn(err.message);
     else console.error(err);
     if (err?.hint && err.hint !== 'unknown') showUnsupported(err.hint, err.label || formatFor(name)?.label);
     else toast(`${t('loadError')}: ${err?.message || err}`, true, 7000);
   } finally {
-    showLoading(null);
+    if (current()) showLoading(null);
   }
 }
 
@@ -202,6 +229,10 @@ function resetDocState() {
   state.pdfHits = [];
   state.measures.length = 0;
   state.sheetScale = null;
+  state.print.window = null;
+  state.print.area = 'extents';
+  thumbObserver?.disconnect();
+  $('#thumbs').innerHTML = '';
   showProperties();
   assistant.reset();
   $('#aiLog').innerHTML = '';
@@ -248,6 +279,9 @@ function setSheetDoc(kind, sheet) {
   resetDocState();
   state.doc = { kind, sheet };
   updateNeeds();
+  // Drop the previous drawing's layer and block lists (their handlers hold its scenes).
+  buildLayerPanel();
+  buildBlockPanel();
   viewer.setDocument(sheet);
   buildSpaceTabs();
   buildThumbs();
@@ -306,7 +340,9 @@ function updateStatus(w) {
       parts.push(`X ${formatNum(w[0] + o.x, 3)}  Y ${formatNum(w[1] + o.y, 3)}`);
     } else {
       const { factor, unit } = measureUnits();
-      parts.push(`X ${formatNum(w[0] * factor, 2)}  Y ${formatNum(w[1] * factor, 2)} ${unit}`);
+      // Images count Y from the top, like image editors.
+      const y = state.doc.kind === 'image' ? activeSheet().height - w[1] : w[1];
+      parts.push(`X ${formatNum(w[0] * factor, 2)}  Y ${formatNum(y * factor, 2)} ${unit}`);
     }
   }
   if (state.doc.kind === 'cad') {
@@ -352,7 +388,8 @@ function zoomToItems(ids, pad = 0.35) {
 }
 
 // ---------------------------------------------------------------- side panels
-function setSideTab(name) {
+/** Shows a sidebar tab; `focus` puts the cursor in the search box (only when the user asked for Search). */
+function setSideTab(name, focus = false) {
   const sb = $('#sidebar');
   if (!name) {
     sb.classList.remove('open');
@@ -361,7 +398,7 @@ function setSideTab(name) {
   }
   for (const b of $$('#sideTabs button')) b.classList.toggle('active', b.dataset.tab === name);
   for (const p of $$('.tab-panel')) p.classList.toggle('active', p.dataset.panel === name);
-  if (name === 'search') setTimeout(() => $('#searchInput').focus(), 0);
+  if (name === 'search' && focus) setTimeout(() => $('#searchInput').focus(), 0);
 }
 
 function buildLayerPanel() {
@@ -451,8 +488,9 @@ function buildInfoPanel() {
     const img = doc.sheet;
     rows.push([t('file'), img.fileName], [t('format'), img.format], [t('pixelSize'), `${formatNum(img.width, 0)} × ${formatNum(img.height, 0)} px`]);
     if (img.pageCount > 1) rows.push([t('pages'), `${img.pageNo} / ${img.pageCount}`]);
+    if (img.dpi) rows.push([t('resolution'), `${formatNum(img.dpi, 1)} dpi · ${formatNum(img.width * img.mmPerUnit, 0)} × ${formatNum(img.height * img.mmPerUnit, 0)} mm`]);
     rows.push([t('fileSize'), formatBytes(img.buffer.byteLength)]);
-    if (state.sheetScale) rows.push([t('pdfScale'), `1 px = ${state.sheetScale.factor.toPrecision(4)} m`]);
+    if (state.sheetScale) rows.push([t('pdfScale'), `1 px = ${state.sheetScale.factor.toPrecision(4)} ${state.sheetScale.unit}`]);
   }
   dl.innerHTML = rows.map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd dir="auto">${escapeHtml(v)}</dd>`).join('');
 }
@@ -482,16 +520,32 @@ function buildSpaceTabs() {
   }
 }
 
+let thumbObserver = null;
 function buildThumbs() {
   const host = $('#thumbs');
   host.innerHTML = '';
+  thumbObserver?.disconnect();
   const pdf = activeSheet();
-  const io = new IntersectionObserver((entries) => {
+  // Thumbnails are rendered one at a time, only once they scroll into view.
+  const queue = [];
+  let busy = false;
+  const pump = async () => {
+    if (busy) return;
+    busy = true;
+    while (queue.length && activeSheet() === pdf) {
+      const el = queue.shift();
+      try { el.prepend(await pdf.thumbnail(+el.dataset.page)); } catch { /* page could not be rendered */ }
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    busy = false;
+  };
+  const io = thumbObserver = new IntersectionObserver((entries) => {
     for (const e of entries) {
       if (!e.isIntersecting || e.target.dataset.done) continue;
       e.target.dataset.done = '1';
-      pdf.thumbnail(+e.target.dataset.page).then((c) => e.target.prepend(c)).catch(() => {});
+      queue.push(e.target);
     }
+    pump();
   }, { root: host });
   for (let n = 1; n <= pdf.pageCount; n++) {
     const d = document.createElement('div');
@@ -521,14 +575,14 @@ async function runSearch() {
     for (const r of res) {
       const li = document.createElement('li');
       if (r.kind === 'layer') {
-        li.innerHTML = `<span class="name">${escapeHtml(r.text)}</span><span class="tag">${t('layer')}</span>`;
+        li.innerHTML = `<span class="name"><bdi>${escapeHtml(r.text)}</bdi></span><span class="tag">${t('layer')}</span>`;
         li.addEventListener('click', () => {
           state.hidden = new Set([...doc.drawing.layers.keys()].filter((n) => n !== r.layer));
           layersChanged();
         });
       } else {
         const it = sp.scene.items[r.item];
-        li.innerHTML = `<span class="name">${escapeHtml(r.text)}<span class="sub">${escapeHtml(it.layer)} · ${escapeHtml(it.type)}</span></span>`;
+        li.innerHTML = `<span class="name"><bdi>${escapeHtml(r.text)}</bdi><span class="sub">${escapeHtml(it.layer)} · ${escapeHtml(it.type)}</span></span>`;
         li.addEventListener('click', () => {
           state.selection = [r.item];
           showProperties();
@@ -546,7 +600,7 @@ async function runSearch() {
     $('#searchCount').textContent = hits.length ? `${hits.length} ${t('results')}` : doc.kind === 'image' ? t('imageNoText') : t('noResults');
     for (const h of hits) {
       const li = document.createElement('li');
-      li.innerHTML = `<span class="name">${escapeHtml(h.text)}</span><span class="tag">${t('page')} ${h.page}</span>`;
+      li.innerHTML = `<span class="name"><bdi>${escapeHtml(h.text)}</bdi></span><span class="tag">${t('page')} ${h.page}</span>`;
       li.addEventListener('click', () => focusPdfHit(h));
       ul.append(li);
     }
@@ -572,6 +626,8 @@ function showProperties() {
   const dl = $('#propList');
   const sp = activeSpace();
   const id = state.selection[0];
+  // On phones the panel is a drawer: a button offers it while something is selected.
+  $('#propsFab').hidden = !sp || id === undefined;
   if (!sp || id === undefined) {
     dl.innerHTML = `<div class="empty">${t('nothingSelected')}</div>`;
     return;
@@ -629,6 +685,7 @@ function openRight(tab) {
 }
 
 // ---------------------------------------------------------------- AI assistant
+let aiImage = { key: null, url: null };
 const assistant = new Assistant({
   async getDocument() {
     const doc = state.doc;
@@ -638,17 +695,30 @@ const assistant = new Assistant({
     }
     const sheet = doc.sheet;
     if (doc.kind === 'image') {
-      // Images carry no text: the page itself goes to the model.
+      // Images carry no text: the page itself goes to the model, encoded once per page.
+      const key = `image|${sheet.fileName}|${sheet.pageNo}`;
+      if (aiImage.key !== key) {
+        let url = null;
+        try { url = imageDataUrl(sheet.pageImage(1568)); } catch (err) { console.warn('Page image unavailable for the assistant', err); }
+        aiImage = { key, url };
+      }
       return {
-        key: `image|${sheet.fileName}|${sheet.pageNo}`, title: sheet.fileName,
-        text: `${sheet.format} image "${sheet.fileName}", ${Math.round(sheet.width)} × ${Math.round(sheet.height)} pixels, ${formatBytes(sheet.buffer.byteLength)}${sheet.pageCount > 1 ? `, page ${sheet.pageNo} of ${sheet.pageCount}` : ''}. There is no extracted text; the image is attached.`,
-        images: [imageDataUrl(sheet.pageImage(1568))],
+        key, title: sheet.fileName,
+        text: `${sheet.format} image "${sheet.fileName}", ${Math.round(sheet.width)} × ${Math.round(sheet.height)} pixels, ${formatBytes(sheet.buffer.byteLength)}${sheet.pageCount > 1 ? `, page ${sheet.pageNo} of ${sheet.pageCount}` : ''}. There is no extracted text; ${aiImage.url ? 'the image is attached' : 'the image could not be attached'}.`,
+        images: aiImage.url ? [aiImage.url] : [],
       };
     }
     const { text } = await sheet.fullText();
     return { key: `pdf|${sheet.fileName}|${sheet.pageCount}`, title: sheet.fileName, text: `PDF document "${sheet.fileName}", ${sheet.pageCount} page(s). The user is viewing page ${sheet.pageNo}.\n${text}` };
   },
-  captureView: () => viewer.captureView(),
+  captureView: () => {
+    try {
+      return viewer.captureView();
+    } catch {
+      // e.g. an SVG with embedded HTML makes the canvas unreadable in some browsers
+      throw new Error(t('captureFailed'));
+    }
+  },
   tools: {
     async find_in_drawing({ query }) {
       const doc = state.doc;
@@ -739,7 +809,7 @@ function showAiIntro() {
 }
 
 function appendAiError(code, message) {
-  const map = { 'no-key': 'aiNoKey', auth: 'aiErrAuth', rate: 'aiErrRate', network: 'aiErrNetwork', model: 'aiErrModel', refusal: 'aiErrRefusal', 'max-tokens': 'aiErrMaxTokens' };
+  const map = { 'no-key': 'aiNoKey', auth: 'aiErrAuth', rate: 'aiErrRate', network: 'aiErrNetwork', model: 'aiErrModel', refusal: 'aiErrRefusal', 'max-tokens': 'aiErrMaxTokens', overloaded: 'aiErrOverloaded' };
   const div = document.createElement('div');
   div.className = 'msg error';
   div.textContent = map[code] ? t(map[code]) : `${t('aiErr')}${message ? ': ' + message : ''}`;
@@ -775,9 +845,13 @@ async function sendAi(text, includeView) {
   sendBtn.innerHTML = `<span>${t('aiStop')}</span>`;
   let md = '';
   let frame = 0;
+  let stopped = false;
   const paint = () => {
     frame = 0;
-    bot.innerHTML = md.trim() ? renderMarkdown(md) : `<span class="thinking">${t('aiThinking')}</span>`;
+    bot.innerHTML = md.trim() ? renderMarkdown(md) : stopped ? '' : `<span class="thinking">${t('aiThinking')}</span>`;
+    // References to items that do not exist in this drawing stay plain text.
+    for (const r of bot.querySelectorAll('.ref')) if (!activeSpace()?.scene.items[+r.dataset.item]) r.replaceWith(r.textContent);
+    if (stopped) bot.insertAdjacentHTML('beforeend', `<div class="muted small">${t('aiStopped')}</div>`);
     log.scrollTop = log.scrollHeight;
   };
   await assistant.send(text, { includeView: includeView ?? $('#aiView').checked }, (ev) => {
@@ -791,13 +865,14 @@ async function sendAi(text, includeView) {
       div.textContent = `${t('tool_' + ev.name)} ${arg}`.trim();
       log.insertBefore(div, bot);
     } else if (ev.type === 'error') {
+      if (ev.code === 'aborted') { stopped = true; return; }
       if (!md.trim()) bot.remove();
-      if (ev.code !== 'aborted') appendAiError(ev.code, ev.message);
+      appendAiError(ev.code, ev.message);
     }
   });
   cancelAnimationFrame(frame);
   if (bot.isConnected) {
-    if (md.trim()) paint();
+    if (md.trim() || stopped) paint();
     else bot.remove();
   }
   sendBtn.innerHTML = `<span>${t('aiSend')}</span>`;
@@ -816,7 +891,8 @@ $('#aiLog').addEventListener('click', (ev) => {
 
 $('#aiForm').addEventListener('submit', (ev) => {
   ev.preventDefault();
-  if (assistant.busy) { assistant.stop(); return; }
+  // While an answer streams only the Stop button (the send button) stops it.
+  if (assistant.busy) { if (ev.submitter?.id === 'aiSend') assistant.stop(); return; }
   const input = $('#aiInput');
   const text = input.value;
   input.value = '';
@@ -825,7 +901,7 @@ $('#aiForm').addEventListener('submit', (ev) => {
 $('#aiInput').addEventListener('keydown', (ev) => {
   if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
     ev.preventDefault();
-    $('#aiForm').requestSubmit();
+    if (!assistant.busy) $('#aiForm').requestSubmit();
   }
 });
 
@@ -861,6 +937,7 @@ function openPrint() {
   $('#pdfPrint').hidden = !isPdf;
   // Images use paper, orientation, area and title strip; scale/colour/lineweights are CAD-only.
   for (const el of $$('[data-print="cad"]', dlg)) el.hidden = kind !== 'cad';
+  $('[data-print="pages"]', dlg).hidden = !(kind === 'image' && state.doc.sheet.pageCount > 1);
   $('#pDownload span').textContent = isPdf ? t('downloadOriginal') : t('downloadPdf');
   if (!isPdf) {
     const p = state.print;
@@ -902,7 +979,8 @@ function plotOptions() {
     const b = sheet.bbox;
     area = [Math.max(area[0], b[0]), Math.max(area[1], b[1]), Math.min(area[2], b[2]), Math.min(area[3], b[3])];
     if (area[0] >= area[2] || area[1] >= area[3]) area = b;
-    return { paper: p.paper, orientation: p.orientation, area, scaleMode: 'fit', stamp: p.stamp, title: `${sheet.fileName}${sheet.pageCount > 1 ? ` – ${t('page')} ${sheet.pageNo}` : ''}` };
+    const all = sheet.pageCount > 1 && $('#pPages').value === 'all';
+    return { paper: p.paper, orientation: p.orientation, area, scaleMode: 'fit', stamp: p.stamp, pages: all ? 'all' : 'current', title: `${sheet.fileName}${sheet.pageCount > 1 && !all ? ` – ${t('page')} ${sheet.pageNo}` : ''}` };
   }
   return {
     paper: p.paper, orientation: p.orientation, area,
@@ -1019,22 +1097,32 @@ $('#printOptions').addEventListener('change', (ev) => {
   updatePrintPreview();
 });
 
-$('#pDownload').addEventListener('click', () => {
+/** Runs a print/export step, reporting failures (memory, blocked image data…) instead of failing silently. */
+function guarded(fn) {
+  try {
+    fn();
+  } catch (err) {
+    console.error(err);
+    toast(`${t('printFailed')}: ${err?.message || err}`, true, 7000);
+  }
+}
+
+$('#pDownload').addEventListener('click', () => guarded(() => {
   if (state.doc.kind === 'pdf') {
     download(new Blob([state.doc.sheet.buffer], { type: 'application/pdf' }), state.doc.sheet.fileName);
     return;
   }
   makePlotPdf().save(pdfFileName());
-});
+}));
 
-$('#pPrint').addEventListener('click', () => {
+$('#pPrint').addEventListener('click', () => guarded(() => {
   if (state.doc.kind === 'pdf') {
     printBlob(new Blob([state.doc.sheet.buffer], { type: 'application/pdf' }));
   } else {
     printBlob(makePlotPdf().output('blob'));
   }
   $('#printDialog').close();
-});
+}));
 
 // ---------------------------------------------------------------- event wiring
 function onAction(action, el) {
@@ -1051,6 +1139,7 @@ function onAction(action, el) {
     case 'print': openPrint(); break;
     case 'ai': openRight('ai'); break;
     case 'closeRight': closeRight(); break;
+    case 'showProps': openRight('props'); break;
     case 'settings': openSettings(); break;
     case 'layersAll': state.hidden.clear(); layersChanged(); break;
     case 'layersNone': state.hidden = new Set(state.doc.drawing.layers.keys()); layersChanged(); break;
@@ -1075,7 +1164,7 @@ document.addEventListener('click', (ev) => {
   const el = ev.target.closest('[data-action]');
   if (el) { onAction(el.dataset.action, el); return; }
   const tab = ev.target.closest('[data-tab]');
-  if (tab) { setSideTab(tab.dataset.tab); return; }
+  if (tab) { setSideTab(tab.dataset.tab, true); return; }
   const rtab = ev.target.closest('[data-rtab]');
   if (rtab) { openRight(rtab.dataset.rtab); return; }
   if (!ev.target.closest('.menu')) closeMenus();
@@ -1114,10 +1203,27 @@ $('#fileInput').addEventListener('change', (ev) => {
 });
 
 document.addEventListener('keydown', (ev) => {
-  if (ev.target.closest('input, textarea, select, dialog')) return;
+  // An open menu closes first, even when its Snap checkbox has the focus.
+  if (ev.key === 'Escape' && !$('#measureMenu').hidden) {
+    closeMenus();
+    if (ev.target.closest('.menu')) ev.target.blur();
+    ev.preventDefault();
+    return;
+  }
+  // Ctrl/Cmd shortcuts work everywhere except inside dialogs, and before the single-key ones.
+  const mod = ev.ctrlKey || ev.metaKey;
+  if (mod && !ev.altKey && !ev.target.closest('dialog')) {
+    const k = ev.key.toLowerCase();
+    if (k === 'o') { ev.preventDefault(); $('#fileInput').click(); return; }
+    if (k === 'p' && state.doc) { ev.preventDefault(); openPrint(); return; }
+    if (k === 'f' && state.doc) { ev.preventDefault(); setSideTab('search', true); $('#sidebar').classList.add('open'); return; }
+  }
+  if (mod || ev.altKey || ev.target.closest('input, textarea, select, dialog')) return;
   if (viewer.tool?.key?.(ev)) { viewer.renderOverlay(); ev.preventDefault(); return; }
   if (ev.key === 'Escape') {
+    // Esc with no measurement in progress leaves the tool.
     if (currentTool !== 'select') setTool('select');
+    closeMenus();
     state.selection = [];
     state.highlights = [];
     showProperties();
@@ -1127,9 +1233,6 @@ document.addEventListener('keydown', (ev) => {
   else if (ev.key === '-' && state.doc) viewer.zoomAt(1 / 1.5);
   else if (ev.key === 'PageDown' && activeSheet()) gotoPage(activeSheet().pageNo + 1);
   else if (ev.key === 'PageUp' && activeSheet()) gotoPage(activeSheet().pageNo - 1);
-  else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'o') { ev.preventDefault(); $('#fileInput').click(); }
-  else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'p' && state.doc) { ev.preventDefault(); openPrint(); }
-  else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'f' && state.doc) { ev.preventDefault(); setSideTab('search'); $('#sidebar').classList.add('open'); }
 });
 
 // Drag and drop
@@ -1141,8 +1244,10 @@ window.addEventListener('drop', (ev) => {
   ev.preventDefault();
   dragDepth = 0;
   document.body.classList.remove('dragging');
-  const f = ev.dataTransfer?.files?.[0];
-  if (f) openFile(f);
+  const files = ev.dataTransfer?.files;
+  if (!files?.length) return;
+  openFile(files[0]);
+  if (files.length > 1) toast(t('oneFileAtATime'), false, 5000);
 });
 
 // Files opened from the OS when installed as an app (PWA file handling).

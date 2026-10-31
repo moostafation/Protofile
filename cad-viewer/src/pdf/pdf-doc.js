@@ -2,6 +2,7 @@
 // points with y pointing up; only the visible region is rasterised at screen resolution.
 import * as pdfjs from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import { buildLines, findInLines } from './text-lines.js';
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -18,6 +19,8 @@ export async function openPdf(buffer, fileName) {
 export class PdfDocument {
   constructor(pdf, fileName, buffer) {
     this.kind = 'pdf';
+    this.unit = 'pt';
+    this.pxPerUnit = 96 / 72; // CSS px per point at 100 %
     this.pdf = pdf;
     this.fileName = fileName;
     this.buffer = buffer;
@@ -28,6 +31,15 @@ export class PdfDocument {
     this.cache = null; // hi-res visible region
     this.task = null;
     this.timer = 0;
+  }
+
+  /** Frees pdf.js resources when another document is opened. */
+  dispose() {
+    clearTimeout(this.timer);
+    this.task?.cancel();
+    this.task = null;
+    this.base = this.cache = null;
+    this.pdf.destroy().catch(() => {});
   }
 
   async setPage(n) {
@@ -140,15 +152,14 @@ export class PdfDocument {
     return canvas;
   }
 
-  /** Text items of a page with their world-space rectangles. */
+  /** Text of a page as readable lines, plus each text item's world-space rectangle. */
   async pageText(n) {
     if (this.texts.has(n)) return this.texts.get(n);
     const page = n === this.pageNo ? this.page : await this.pdf.getPage(n);
     const vp = page.getViewport({ scale: 1 });
     const content = await page.getTextContent();
-    const items = [];
-    for (const it of content.items) {
-      if (!it.str) continue;
+    const rects = content.items.map((it) => {
+      if (!it.str) return null;
       const [a, b, , , e, f] = it.transform;
       const h = it.height || Math.hypot(a, b);
       const ang = Math.atan2(b, a);
@@ -158,25 +169,29 @@ export class PdfDocument {
         .map(([x, y]) => vp.convertToViewportPoint(x, y))
         .map(([x, y]) => [x, vp.height - y]);
       const xs = corners.map((c) => c[0]), ys = corners.map((c) => c[1]);
-      items.push({ str: it.str, rect: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)] });
-    }
-    const text = items.map((i) => i.str).join(' ');
-    const result = { items, text };
+      return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+    });
+    const lines = buildLines(content.items);
+    const text = lines.map((l) => l.text.trim()).filter(Boolean).join('\n');
+    const result = { lines, rects, text };
     this.texts.set(n, result);
     return result;
   }
 
   async search(query, limit = 300) {
-    const q = query.trim().toLowerCase();
-    if (!q) return [];
+    if (!query.trim()) return [];
     const hits = [];
     for (let n = 1; n <= this.pageCount && hits.length < limit; n++) {
-      const { items } = await this.pageText(n);
-      for (const it of items) {
-        if (it.str.toLowerCase().includes(q)) {
-          hits.push({ page: n, text: it.str, rect: it.rect });
-          if (hits.length >= limit) break;
+      const { lines, rects } = await this.pageText(n);
+      for (const m of findInLines(lines, query, limit - hits.length)) {
+        const rect = [Infinity, Infinity, -Infinity, -Infinity];
+        for (const i of m.items) {
+          const r = rects[i];
+          if (!r) continue;
+          rect[0] = Math.min(rect[0], r[0]); rect[1] = Math.min(rect[1], r[1]);
+          rect[2] = Math.max(rect[2], r[2]); rect[3] = Math.max(rect[3], r[3]);
         }
+        if (Number.isFinite(rect[0])) hits.push({ page: n, text: m.line.text.trim().slice(0, 200), rect });
       }
     }
     return hits;

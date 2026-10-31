@@ -64,7 +64,12 @@ export function formatById(id) {
   return FORMATS.find((f) => f.id === id) ?? null;
 }
 
-/** Recognises a few formats from their first bytes (wrong or missing extensions). */
+export const SNIFF_BYTES = 4096;
+
+/** ASCII DXF: a "0 / SECTION / 2 / <name>" group near the start (comments and whitespace allowed). */
+const DXF_START = /(^|\n)[ \t]*0[ \t]*\r?\n[ \t]*SECTION[ \t]*\r?\n[ \t]*2[ \t]*\r?\n[ \t]*(HEADER|CLASSES|TABLES|BLOCKS|ENTITIES|OBJECTS|THUMBNAILIMAGE)\b/;
+
+/** Recognises formats from their first bytes (up to SNIFF_BYTES), for wrong or missing extensions. */
 export function sniff(bytes) {
   const b = bytes;
   const ascii = (i, s) => [...s].every((ch, k) => b[i + k] === ch.charCodeAt(0));
@@ -78,6 +83,10 @@ export function sniff(bytes) {
   if ((b[0] === 0x08 || b[0] === 0xc8) && b[1] === 0x09 && b[2] === 0xfe && b[3] === 0x02) return formatById('dgn');
   if (ascii(0, '(DWF V')) return formatById('dwf');
   if (ascii(0, '%!PS')) return formatById('postscript');
+  if (ascii(0, 'AutoCAD Binary DXF')) return formatById('dxf');
+  let head = '';
+  for (let i = 0; i < Math.min(b.length, SNIFF_BYTES); i++) head += String.fromCharCode(b[i]);
+  if (DXF_START.test(head)) return formatById('dxf');
   return null;
 }
 
