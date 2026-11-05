@@ -416,7 +416,9 @@ class DgnReader {
         return next;
       }
       case 7: {
-        // Text node: the member texts carry their own positions.
+        // Text node: the member texts carry their own positions. Too deep (hostile chains of
+        // nodes): skip the header so its members are read by the enclosing element.
+        if (depth >= MAX_NEST) return next;
         const count = u16(b, o + 38);
         let j = next;
         for (let k = 0; k < count && j < els.length && els[j].complex; k++) j = this.convert(els, j, out, depth + 1);

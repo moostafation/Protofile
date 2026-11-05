@@ -105,7 +105,8 @@ export function buildDrawing(db, source, fileName) {
     const entities = block.entities.length
       ? block.entities
       : (db.entities ?? []).filter((e) => e.ownerBlockRecordSoftId === block.handle);
-    if (!entities.length) continue;
+    // Layouts with nothing drawable (e.g. only the sheet's own overall viewport) get no tab.
+    if (!entities.some((e) => !(e.type === 'VIEWPORT' && e.viewportId === 1))) continue;
     layouts.push({ name: lo.layoutName, tabOrder: lo.tabOrder ?? 0, entities, limits: [lo.minLimit, lo.maxLimit] });
   }
   layouts.sort((a, b) => a.tabOrder - b.tabOrder);

@@ -209,7 +209,7 @@ class Plotter {
     this.term = ETX;
     this.termPrint = false;
     this.dir = 0;
-    this.charW = 0.19 * 400; this.charH = 0.27 * 400; // plotter units
+    this.defaultCharSize();
     this.lo = 1;
     this.fill = { type: 1, spacing: 0, angle: 0 };
     this.poly = null;
@@ -276,6 +276,12 @@ class Plotter {
     const r = this.ro;
     const [px, py] = r === 90 ? [-y, x] : r === 180 ? [-x, -y] : r === 270 ? [y, -x] : [x, y];
     return { x: px / PLU_PER_MM, y: py / PLU_PER_MM, bulge };
+  }
+
+  /** HP-GL's default character cell: 0.19 × 0.27 cm (in plotter units). */
+  defaultCharSize() {
+    this.charW = 0.19 * 400;
+    this.charH = 0.27 * 400;
   }
 
   /** Counts vertices against the budget; false once the file is too large to keep drawing. */
@@ -617,7 +623,9 @@ class Plotter {
         break;
       }
       case 'EP': case 'FP': {
+        // Every edge/fill copies the polygon buffer, so the copies count against the vertex budget.
         const rings = this.polygon || [];
+        if (!this.budget(rings.reduce((n, r) => n + r.length, 0))) break;
         if (op === 'FP') this.fillRings(rings.map((r) => r.map((v) => ({ ...v }))));
         else for (const r of rings) {
           const e = this.base('LWPOLYLINE');
@@ -665,11 +673,15 @@ class Plotter {
       case 'DI': this.dir = p.length >= 2 && (p[0] || p[1]) ? Math.atan2(p[1], p[0]) : 0; break;
       // DR: run and rise are percentages of the P1-P2 width and height.
       case 'DR': this.dir = p.length >= 2 && (p[0] || p[1]) ? Math.atan2(p[1] * (this.p2[1] - this.p1[1]), p[0] * (this.p2[0] - this.p1[0])) : 0; break;
-      case 'SI': if (p.length >= 2) { this.charW = p[0] * 400; this.charH = p[1] * 400; } break;
+      // A zero or missing width/height (e.g. "SI 0.2,0") falls back to the default size.
+      case 'SI':
+        if (p.length >= 2 && p[0] > 0 && p[1] > 0) { this.charW = p[0] * 400; this.charH = p[1] * 400; }
+        else this.defaultCharSize();
+        break;
       case 'SR': {
         const w = p.length >= 2 ? p[0] : 0.75, h = p.length >= 2 ? p[1] : 1.5;
-        this.charW = (w / 100) * Math.abs(this.p2[0] - this.p1[0]);
-        this.charH = (h / 100) * Math.abs(this.p2[1] - this.p1[1]);
+        const cw = (w / 100) * Math.abs(this.p2[0] - this.p1[0]), ch = (h / 100) * Math.abs(this.p2[1] - this.p1[1]);
+        if (cw > 0 && ch > 0) { this.charW = cw; this.charH = ch; } else this.defaultCharSize();
         break;
       }
       case 'SD': case 'AD':

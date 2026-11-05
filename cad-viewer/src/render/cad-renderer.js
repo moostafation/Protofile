@@ -21,19 +21,29 @@ export function measureText(s) {
   return measureCtx.measureText(s).width / 100;
 }
 
-const MAX_LUMA_ON_LIGHT = 0.55;
+// Light backgrounds: colours are darkened to at most this relative luminance (WCAG), which gives
+// a contrast of at least 3.2 : 1 against white (ACI yellow, cyan and green are far too pale).
+const MAX_LUMINANCE_ON_LIGHT = 0.28;
 const darkened = new Map();
+const toLinear = (c) => { c /= 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+const toSrgb = (v) => Math.round(255 * (v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055));
 
-/** CSS colour of a primitive. On light backgrounds very light colours (ACI yellow, green, cyan…) are darkened to stay readable, unless `theme.trueColor`. */
+/** WCAG relative luminance of a 0xRRGGBB colour. */
+export function relativeLuminance(rgb) {
+  return 0.2126 * toLinear((rgb >> 16) & 255) + 0.7152 * toLinear((rgb >> 8) & 255) + 0.0722 * toLinear(rgb & 255);
+}
+
+/** CSS colour of a primitive. On light backgrounds light colours are darkened (same hue) to stay readable, unless `theme.trueColor`. */
 export function colorCss(rgb, theme) {
   if (theme.mono) return theme.fg;
   if (rgb === FOREGROUND) return theme.fg;
   if (!theme.trueColor && isLight(theme.bg)) {
     let css = darkened.get(rgb);
     if (!css) {
-      const k = Math.min(1, MAX_LUMA_ON_LIGHT / Math.max(luminance(rgb), 1e-6));
-      const r = Math.round(((rgb >> 16) & 255) * k), g = Math.round(((rgb >> 8) & 255) * k), b = Math.round((rgb & 255) * k);
-      darkened.set(rgb, (css = `rgb(${r},${g},${b})`));
+      // Scaling the linear components scales the luminance by the same factor and keeps the hue.
+      const k = Math.min(1, MAX_LUMINANCE_ON_LIGHT / Math.max(relativeLuminance(rgb), 1e-6));
+      const c = (shift) => toSrgb(toLinear((rgb >> shift) & 255) * k);
+      darkened.set(rgb, (css = `rgb(${c(16)},${c(8)},${c(0)})`));
     }
     return css;
   }

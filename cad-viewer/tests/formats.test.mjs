@@ -12,6 +12,10 @@ import { formatFor, resolveFormat, acceptAttribute, openableExtensions, FORMATS 
 import { buildDrawing } from '../src/cad/drawing.js';
 import { parseDxf } from '../src/cad/dxf-parser.js';
 import { buildScene, STROKE, TEXT, FILL } from '../src/cad/scene.js';
+import { readDwg } from '../src/cad/dwg-read.js';
+import { imageDpi } from '../src/formats/image-meta.js';
+import { colorCss, relativeLuminance } from '../src/render/cad-renderer.js';
+import { aciToRgb } from '../src/cad/aci.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixture = (name) => {
@@ -298,6 +302,74 @@ test('desktop file associations (src-tauri/tauri.conf.json) list exactly the ope
   for (const a of assoc) {
     assert.match(a.name, /^ProtoCAD\.[A-Z]+$/, `${a.ext} has a ProtoCAD class name`);
     assert.ok(a.description && a.mimeType, `${a.ext} has a description and a MIME type`);
+  }
+});
+
+console.log('Robustness and display');
+test('DGN: deeply chained text nodes do not overflow the stack', () => {
+  const tcb = new Uint8Array(1536); tcb.set([0x08, 0x09, 0xfe, 0x02]);
+  const node = (complex) => { const c = new Uint8Array(80); c[0] = 1 | (complex ? 0x80 : 0); c[1] = 7; c[2] = 38; c[30] = 24; c[38] = 1; return c; };
+  const line = () => { const c = new Uint8Array(52); c[0] = 1 | 0x80; c[1] = 3; c[2] = 24; c[30] = 8; c[38] = 1; return c; };
+  const parts = [tcb, node(false), ...Array.from({ length: 50000 }, () => node(true)), line()];
+  const out = new Uint8Array(parts.reduce((a, p) => a + p.length, 0) + 2);
+  let o = 0;
+  for (const p of parts) { out.set(p, o); o += p.length; }
+  out.set([0xff, 0xff], o);
+  assert.doesNotThrow(() => parseDgn(out.buffer));
+});
+
+test('HP-GL: a zero character size falls back to the default (label stays visible)', () => {
+  const db = parseHpgl(bytes('IN;SP1;PU0,0;PD400,0;PU0,0;SI0.2,0;LBABC\x03;SR0,0;LBDEF\x03'));
+  const texts = byType(db, 'TEXT');
+  assert.equal(texts.length, 2);
+  for (const t of texts) assert.ok(Number.isFinite(t.xScale) && t.xScale > 0 && t.textHeight > 0, JSON.stringify(t));
+});
+
+test('DWG: critical LibreDWG errors fail unless the file still has drawing objects', () => {
+  const stub = (error, entities, data = {}) => ({
+    wasmInstance: { FS: { writeFile() {}, analyzePath: () => ({ exists: false }), unlink() {} }, dwg_read_file: () => ({ error, data }) },
+    convert: () => ({ entities }),
+    dwg_free() {},
+  });
+  assert.deepEqual(readDwg(stub(256, [{ type: 'LINE' }]), new ArrayBuffer(8)).warnings, ['dwgErrors']);
+  assert.equal(readDwg(stub(68, [{ type: 'LINE' }]), new ArrayBuffer(8)).warnings, undefined, 'non-critical bits are not reported');
+  assert.throws(() => readDwg(stub(256, []), new ArrayBuffer(8)), /section not found/);
+  assert.throws(() => readDwg(stub(2048, [], null), new ArrayBuffer(8)), /not a valid DWG/);
+});
+
+test('layouts with nothing but the overall paper viewport get no tab', () => {
+  const vp = (id) => ({ type: 'VIEWPORT', viewportId: id, viewportCenter: { x: 0, y: 0 }, width: 10, height: 10 });
+  const db = {
+    tables: { BLOCK_RECORD: { entries: [
+      { name: '*Model_Space', handle: '1F', entities: [{ type: 'LINE', layer: '0', startPoint: { x: 0, y: 0 }, endPoint: { x: 1, y: 1 } }] },
+      { name: '*Paper_Space', handle: '20', entities: [vp(1)] },
+      { name: '*Paper_Space0', handle: '21', entities: [vp(1), vp(2)] },
+    ] } },
+    objects: { LAYOUT: [{ layoutName: 'Layout1', paperSpaceTableId: '20', tabOrder: 1 }, { layoutName: 'Layout2', paperSpaceTableId: '21', tabOrder: 2 }] },
+  };
+  assert.deepEqual(buildDrawing(db, 'dwg', 'x').layouts.map((l) => l.name), ['Layout2']);
+});
+
+test('image resolution: per-axis DPI from PNG pHYs and JPEG JFIF', () => {
+  const png = new Uint8Array(8 + 21);
+  png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const dv = new DataView(png.buffer);
+  dv.setUint32(8, 9); png.set([...'pHYs'].map((c) => c.charCodeAt(0)), 12);
+  dv.setUint32(16, 8031); dv.setUint32(20, 3858); png[24] = 1; // 204 × 98 dpi in dots per metre
+  const d = imageDpi('PNG', png);
+  near(d.x, 204, 0.05); near(d.y, 98, 0.05);
+  const jpg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 16, ...[...'JFIF\0'].map((c) => c.charCodeAt(0)), 1, 1, 1, 0, 72, 0, 72, 0, 0]);
+  assert.deepEqual(imageDpi('JPEG', jpg), { x: 72, y: 72 });
+});
+
+test('light theme: every ACI colour has at least 3:1 contrast against white', () => {
+  const theme = { bg: '#ffffff', fg: '#000000', mono: false };
+  for (let i = 1; i < 256; i++) {
+    const rgb = aciToRgb(i);
+    if (rgb < 0) continue;
+    const [r, g, b] = colorCss(rgb, theme).match(/\d+/g).map(Number);
+    const contrast = 1.05 / (relativeLuminance((r << 16) | (g << 8) | b) + 0.05);
+    assert.ok(contrast >= 3, `ACI ${i}: ${contrast.toFixed(2)}`);
   }
 });
 

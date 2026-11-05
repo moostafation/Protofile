@@ -168,10 +168,15 @@ const nextFrame = () => new Promise((r) => requestAnimationFrame(() => setTimeou
  * The format comes from the registry (extension, corrected by the file's first bytes).
  * Resolves to true when the file is shown.
  */
-let openSeq = 0;
+let openSeq = 0; // the load whose result may be shown
+let chosenSeq = 0; // order in which files were chosen
+let latestLoadable = 0; // the latest chosen file that turned out to be openable
+let loading = false; // a load of an openable file is running
 async function openFile(file) {
-  // The last file chosen wins: results of earlier, slower loads are dropped.
-  const my = ++openSeq;
+  // The last file chosen wins: results of earlier, slower loads are dropped. A file that cannot
+  // be opened (unsupported, unreadable) does not cancel the one that is loading.
+  const chosen = ++chosenSeq;
+  let my = -1;
   const current = () => my === openSeq;
   const name = file.name || 'drawing';
   const known = formatFor(name);
@@ -179,12 +184,16 @@ async function openFile(file) {
   showLoading(t('loading'));
   try {
     const buffer = await file.arrayBuffer();
-    if (!current()) return false;
     const format = resolveFormat(name, new Uint8Array(buffer, 0, Math.min(buffer.byteLength, SNIFF_BYTES)));
     if (!format) {
       toast(t('unsupported'), true, 6000);
       return false;
     }
+    if (format.category === 'unsupported') { showUnsupported(format.hint, format.label); return false; }
+    if (chosen < latestLoadable) return false; // a file chosen later is already loading
+    latestLoadable = chosen;
+    my = ++openSeq;
+    loading = true;
     const result = await openBuffer(format, buffer, name);
     if (!current()) { result.sheet?.dispose?.(); return false; }
     if (result.kind === 'cad') {
@@ -194,13 +203,14 @@ async function openFile(file) {
       setCadDoc(result.drawing);
       if (result.drawing.warnings.includes('truncated')) toast(t('fileTruncated'), false, 7000);
       if (result.drawing.warnings.includes('limit')) toast(t('fileTooLarge'), false, 7000);
+      if (result.drawing.warnings.includes('dwgErrors')) toast(t('dwgErrors'), false, 8000);
     } else {
       setSheetDoc(result.kind, result.sheet);
     }
     document.title = `${name} – ProtoCAD Viewer`;
     return true;
   } catch (err) {
-    if (!current()) return false;
+    if (my !== -1 && !current()) return false;
     // Unreadable files are expected; only unexpected failures are logged as errors.
     if (err instanceof FormatError) console.warn(err.message);
     else console.error(err);
@@ -208,7 +218,8 @@ async function openFile(file) {
     else toast(`${t('loadError')}: ${err?.message || err}`, true, 7000);
     return false;
   } finally {
-    if (current()) showLoading(null);
+    if (current()) loading = false;
+    if (!loading) showLoading(null);
   }
 }
 
@@ -240,7 +251,7 @@ function chooseFile() {
 
 /** Explains why a known format cannot be opened and which export to use instead. */
 function showUnsupported(hint, label) {
-  showLoading(null);
+  if (!loading) showLoading(null);
   const dlg = $('#unsupportedDialog');
   $('#unsupportedTitle').textContent = t('unsupportedTitle').replace('{fmt}', label || t('thisFile'));
   $('#unsupportedText').textContent = t('hint_' + hint) === 'hint_' + hint ? t('unsupported') : t('hint_' + hint);
@@ -258,6 +269,7 @@ function resetDocState() {
   // dialog that belongs to the previous one.
   for (const id of ['#printDialog', '#calibrateDialog']) if ($(id).open) $(id).close();
   activeSheet()?.dispose?.();
+  aiImage = { key: null, url: null }; // the assistant's copy of the previous picture
   state.selection = [];
   state.highlights = [];
   state.pdfHits = [];
@@ -523,9 +535,15 @@ function buildInfoPanel() {
       [t('size'), `${formatNum(pdf.bbox[2] * 25.4 / 72, 0)} × ${formatNum(pdf.bbox[3] * 25.4 / 72, 0)} mm`]);
   } else if (doc?.kind === 'image') {
     const img = doc.sheet;
-    rows.push([t('file'), img.fileName], [t('format'), img.format], [t('pixelSize'), `${formatNum(img.width, 0)} × ${formatNum(img.height, 0)} px`]);
+    rows.push([t('file'), img.fileName], [t('format'), img.format], [t('pixelSize'), `${formatNum(img.pixelWidth, 0)} × ${formatNum(img.pixelHeight, 0)} px`]);
+    if (img.reducedTo) rows.push([t('shownAt'), `${formatNum(img.reducedTo[0], 0)} × ${formatNum(img.reducedTo[1], 0)} px (${t('reducedForMemory')})`]);
     if (img.pageCount > 1) rows.push([t('pages'), `${img.pageNo} / ${img.pageCount}`]);
-    if (img.dpi) rows.push([t('resolution'), `${formatNum(img.dpi, 1)} dpi · ${formatNum(img.width * img.mmPerUnit, 0)} × ${formatNum(img.height * img.mmPerUnit, 0)} mm`]);
+    if (img.dpi) {
+      const d = img.dpi.x === img.dpi.y ? formatNum(img.dpi.x, 1) : `${formatNum(img.dpi.x, 1)} × ${formatNum(img.dpi.y, 1)}`;
+      rows.push([t('resolution'), img.mmPerUnit
+        ? `${d} dpi · ${formatNum(img.width * img.mmPerUnit, 0)} × ${formatNum(img.height * img.mmPerUnit, 0)} mm`
+        : `${d} dpi (${t('screenDpi')})`]);
+    }
     rows.push([t('fileSize'), formatBytes(img.buffer.byteLength)]);
     if (state.sheetScale) rows.push([t('pdfScale'), `1 px = ${state.sheetScale.factor.toPrecision(4)} ${state.sheetScale.unit}`]);
   }
@@ -741,7 +759,7 @@ const assistant = new Assistant({
       }
       return {
         key, title: sheet.fileName,
-        text: `${sheet.format} image "${sheet.fileName}", ${Math.round(sheet.width)} × ${Math.round(sheet.height)} pixels, ${formatBytes(sheet.buffer.byteLength)}${sheet.pageCount > 1 ? `, page ${sheet.pageNo} of ${sheet.pageCount}` : ''}. There is no extracted text; ${aiImage.url ? 'the image is attached' : 'the image could not be attached'}.`,
+        text: `${sheet.format} image "${sheet.fileName}", ${Math.round(sheet.pixelWidth)} × ${Math.round(sheet.pixelHeight)} pixels, ${formatBytes(sheet.buffer.byteLength)}${sheet.pageCount > 1 ? `, page ${sheet.pageNo} of ${sheet.pageCount}` : ''}. There is no extracted text; ${aiImage.url ? 'the image is attached' : 'the image could not be attached'}.`,
         images: aiImage.url ? [aiImage.url] : [],
       };
     }
@@ -950,6 +968,8 @@ function openSettings() {
   $('#sKey').value = s.apiKey;
   $('#sModel').value = s.model;
   $('#sEffort').value = s.effort;
+  // Esc leaves returnValue unchanged: clear the previous "save" so it cannot save this time.
+  $('#settingsDialog').returnValue = '';
   $('#settingsDialog').showModal();
 }
 
@@ -1081,6 +1101,8 @@ function updatePrintPreview() {
   $('#pInfo').textContent = `${o.paper} ${plan.landscape ? t('landscape') : t('portrait')} · ${Math.round(plan.pageW)}×${Math.round(plan.pageH)} mm${scale}`;
   $('#pInfo').classList.toggle('warn', !plan.fits);
   if (!plan.fits) $('#pInfo').textContent += ` · ${t('printTooBig')}`;
+  const sheet = activeSheet();
+  if (sheet?.pageCount > 1 && $('#pPages').value === 'all') $('#pInfo').textContent += ` · ${t('pagesAllCount').replace('{n}', sheet.pageCount)}`;
 }
 
 function makePlotPdf() {
@@ -1172,6 +1194,8 @@ function onAction(action, el) {
     case 'print': openPrint(); break;
     case 'ai': openRight('ai'); break;
     case 'closeRight': closeRight(); break;
+    // Cancel buttons are type="button" so that Enter in a field submits the dialog (Apply / Save).
+    case 'cancelDialog': el.closest('dialog').close('cancel'); break;
     case 'showProps': openRight('props'); break;
     case 'settings': openSettings(); break;
     case 'layersAll': state.hidden.clear(); layersChanged(); break;

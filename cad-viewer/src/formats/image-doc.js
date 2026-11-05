@@ -5,10 +5,12 @@
 // refuse canvases over ~16.7 megapixels. SVG is re-rasterised for the visible region
 // at screen resolution so it stays sharp.
 import { FormatError } from './errors.js';
-import { imageDpi } from './image-meta.js';
+import { imageDpi, dpi as dpiPair } from './image-meta.js';
 
 const MAX_PIXELS = 32e6; // decoded TIFF pages larger than this are reduced
 const MAX_RAW_BYTES = 600e6; // TIFF pages whose raw samples exceed this are refused
+const MAX_RGBA_BYTES = 320e6; // full-size RGBA allowed for pages that cannot be averaged from their samples
+const MIN_SCAN_DPI = 150; // lower resolutions (72/96 dpi photos, screenshots) say nothing about a real size
 const MAX_CANVAS = 4096 * 4096; // iOS Safari's canvas area limit
 const TILE = 4096;
 const LEVEL_STEP = 4;
@@ -120,6 +122,32 @@ function reduceSamples(ifd, f) {
   return { rgba: out, rw, rh };
 }
 
+/** Averages f × f blocks of w × h RGBA pixels. */
+function reduceRgba(src, w, h, f) {
+  const rw = Math.ceil(w / f), rh = Math.ceil(h / f);
+  const out = new Uint8ClampedArray(rw * rh * 4);
+  const acc = new Float64Array(rw * 4);
+  for (let oy = 0; oy < rh; oy++) {
+    acc.fill(0);
+    const y1 = Math.min(h, (oy + 1) * f);
+    for (let y = oy * f; y < y1; y++) {
+      for (let x = 0, p = y * w * 4; x < w; x++, p += 4) {
+        const a = ((x / f) | 0) * 4;
+        acc[a] += src[p]; acc[a + 1] += src[p + 1]; acc[a + 2] += src[p + 2]; acc[a + 3] += src[p + 3];
+      }
+    }
+    const rows = y1 - oy * f;
+    for (let ox = 0; ox < rw; ox++) {
+      const n = rows * (Math.min(w, (ox + 1) * f) - ox * f), q = (oy * rw + ox) * 4, a = ox * 4;
+      out[q] = acc[a] / n; out[q + 1] = acc[a + 1] / n; out[q + 2] = acc[a + 2] / n; out[q + 3] = acc[a + 3] / n;
+    }
+  }
+  return { rgba: out, rw, rh };
+}
+
+/** Height / width scale of a pixel from the X and Y resolutions (1 for square pixels). */
+const aspect = (d) => (d ? d.x / d.y : 1);
+
 /** Converts packed 1-bit samples to grey RGBA, averaging f × f blocks. */
 function reduceBits(ifd, f) {
   const w = ifd.width, h = ifd.height, data = ifd.data;
@@ -158,8 +186,11 @@ export class ImageDocument {
     this.mime = MIME[format] || 'application/octet-stream';
     this.unit = 'px';
     this.pxPerUnit = 1; // CSS px per world unit at 100 %
-    this.mmPerUnit = null; // paper size of a pixel when the file says (DPI or SVG units)
-    this.dpi = null;
+    this.mmPerUnit = null; // paper size of a pixel when the file gives a plausible one (scan DPI or SVG units)
+    this.dpi = null; // { x, y } from the file
+    this.yScale = 1; // world units per pixel row (non-square pixels are shown in their real proportions)
+    this.pixelWidth = 0;
+    this.pixelHeight = 0;
     this.pageCount = 1;
     this.pageNo = 1;
     this.bbox = [0, 0, 1, 1];
@@ -172,6 +203,12 @@ export class ImageDocument {
 
   get width() { return this.bbox[2]; }
   get height() { return this.bbox[3]; }
+
+  /** [width, height] of the pixels actually shown, when a very large page was reduced to save memory. */
+  get reducedTo() {
+    const l = this.levels[0];
+    return l && l.width < this.pixelWidth ? [l.width, l.height] : null;
+  }
 
   async init() {
     if (this.format === 'SVG') return this.initSvg();
@@ -186,16 +223,26 @@ export class ImageDocument {
     this.setRaster(singleLevel(bmp), bmp.width, bmp.height);
   }
 
-  setDpi(dpi) {
-    if (dpi && Math.abs(dpi - Math.round(dpi)) < 0.05) dpi = Math.round(dpi);
-    this.dpi = dpi && dpi >= 50 && dpi <= 20000 ? dpi : null;
-    this.mmPerUnit = this.dpi ? 25.4 / this.dpi : null;
+  /**
+   * Resolution from the file ({ x, y } dots per inch). Only scan/plot resolutions, or SVG sizes in
+   * physical units (`trusted`), give the picture a real size: 72/96 dpi photos and screenshots
+   * measure in pixels until calibrated. Non-square pixels (fax 204 × 98 dpi) stretch world Y.
+   */
+  setDpi(d, trusted = false) {
+    const round = (v) => (Math.abs(v - Math.round(v)) < 0.05 ? Math.round(v) : v);
+    const ok = (v) => v >= 50 && v <= 20000;
+    this.dpi = d && ok(d.x) && ok(d.y) ? { x: round(d.x), y: round(d.y) } : null;
+    this.physical = !!this.dpi && (trusted || Math.min(this.dpi.x, this.dpi.y) >= MIN_SCAN_DPI);
+    this.mmPerUnit = this.physical ? 25.4 / this.dpi.x : null;
+    this.yScale = aspect(this.dpi);
   }
 
   // ---------- raster ----------
   /** Uses `level` (the finest copy) for a page of `w` × `h` image pixels. */
   setRaster(level, w, h) {
-    this.bbox = [0, 0, w, h];
+    this.pixelWidth = w;
+    this.pixelHeight = h;
+    this.bbox = [0, 0, w, h * this.yScale];
     level.f = w / level.width;
     this.levels = [level];
     let cur = level;
@@ -232,34 +279,69 @@ export class ImageDocument {
   /**
    * Decodes TIFF page `n` into a level reduced to at most `maxPixels`.
    * Very large pages are averaged straight from the decoded samples (never expanded to
-   * full-size RGBA); layouts that cannot be reduced that way are refused when too large.
+   * full-size RGBA) when their layout allows; others (16-bit, CMYK, planar, 2/4-bit…) are
+   * expanded to RGBA and then reduced, within a memory budget.
    */
   decodeTiffPage(n, maxPixels = MAX_PIXELS) {
     const ifd = this.ifds[n - 1];
     const w = ifd.t256[0], h = ifd.t257[0];
     const bps = ifd.t258 ? ifd.t258[0] : 1, spp = ifd.t277 ? ifd.t277[0] : 1;
     const mp = Math.round((w * h) / 1e6);
-    if ((w * h * spp * bps) / 8 > MAX_RAW_BYTES) throw new FormatError(`This TIFF page is too large to open in the browser (${mp} megapixels). Save a reduced copy and open that.`);
+    const tooLarge = () => new FormatError(`This TIFF page is too large to open (${mp} megapixels, ${bps}-bit). Save a reduced copy and open that.`);
+    if ((w * h * spp * bps) / 8 > MAX_RAW_BYTES) throw tooLarge();
     const f = Math.max(1, Math.ceil(Math.sqrt((w * h) / maxPixels)));
-    const planar = ifd.t284 ? ifd.t284[0] : 1;
-    const reducible = bps === 1 ? spp === 1 : bps === 8 && planar === 1 && [0, 1, 2, 3].includes(ifd.t262 ? ifd.t262[0] : 1);
-    if (f > 1 && !reducible) throw new FormatError(`This TIFF page is too large to open in the browser (${mp} megapixels, ${bps}-bit). Save a reduced copy and open that.`);
-    let rgba, rw, rh;
+    let rgba, rw = w, rh = h;
     try {
-      this.utif.decodeImage(this.buffer, ifd, this.ifds);
+      if (spp > 1 && ifd.t284?.[0] === 2) this.decodePlanes(ifd);
+      else this.utif.decodeImage(this.buffer, ifd, this.ifds);
       if (!(ifd.width > 0 && ifd.height > 0) || !ifd.data) throw new Error('no image data');
-      if (f === 1) ({ rgba, rw, rh } = { rgba: new Uint8ClampedArray(this.utif.toRGBA8(ifd).buffer), rw: w, rh: h });
-      else ({ rgba, rw, rh } = bps === 1 ? reduceBits(ifd, f) : reduceSamples(ifd, f));
+      // Checked after decoding: JPEG-compressed (YCbCr) pages hold RGB samples and separate
+      // planes are interleaved by now.
+      const photometric = ifd.t262 ? ifd.t262[0] : 1;
+      const reducible = bps === 1 ? spp === 1 : bps === 8 && [0, 1, 2, 3].includes(photometric);
+      if (f > 1 && reducible) ({ rgba, rw, rh } = bps === 1 ? reduceBits(ifd, f) : reduceSamples(ifd, f));
+      else {
+        if (w * h * 4 > MAX_RGBA_BYTES) throw tooLarge();
+        rgba = new Uint8ClampedArray(this.utif.toRGBA8(ifd).buffer);
+        if (f > 1) ({ rgba, rw, rh } = reduceRgba(rgba, w, h, f));
+      }
     } catch (err) {
       // UTIF throws bare strings for unsupported variants.
       if (err instanceof FormatError) throw err;
       throw new FormatError(`This TIFF page could not be decoded (${typeof err === 'string' ? err : err?.message || 'unsupported variant'}).`);
     } finally {
       ifd.data = null; // keep memory low: pages are decoded again when revisited
+      if (ifd.planarRestore) { ifd.t284 = [2]; delete ifd.planarRestore; }
     }
-    const r = ifd.t282?.[0], unit = ifd.t296 ? ifd.t296[0] : 2;
-    const res = Array.isArray(r) ? r[0] / (r[1] || 1) : r; // rationals come as [numerator, denominator]
-    return { level: tilesFromRgba(rgba, rw, rh), w, h, dpi: res > 0 && unit !== 1 ? (unit === 3 ? res * 2.54 : res) : null };
+    // Rationals come as [numerator, denominator]; resolution unit 1 = none, 2 = inch, 3 = cm.
+    const res = (t) => { const r = t?.[0]; return Array.isArray(r) ? r[0] / (r[1] || 1) : r; };
+    const unit = ifd.t296 ? ifd.t296[0] : 2, k = unit === 3 ? 2.54 : 1;
+    return { level: tilesFromRgba(rgba, rw, rh), w, h, dpi: unit === 1 ? null : dpiPair(res(ifd.t282) * k, res(ifd.t283) * k) };
+  }
+
+  /**
+   * PlanarConfiguration 2 (one plane per sample, e.g. RRR…GGG…BBB…): UTIF places those strips
+   * as if they were interleaved, so each plane is decoded as a one-sample image and the planes
+   * are interleaved into `ifd.data`.
+   */
+  decodePlanes(ifd) {
+    const w = ifd.t256[0], h = ifd.t257[0], spp = ifd.t277[0], bps = ifd.t258[0];
+    const strips = ifd.t322 ? null : ifd.t273;
+    if (!strips || bps % 8 || strips.length % spp) throw new FormatError(`This TIFF layout (separate colour planes${ifd.t322 ? ', tiled' : `, ${bps}-bit`}) is not supported.`);
+    const per = strips.length / spp, bytes = bps / 8, n = w * h;
+    const out = new Uint8Array(n * spp * bytes);
+    let isLE = true;
+    for (let p = 0; p < spp; p++) {
+      const plane = { ...ifd, t277: [1], t258: [bps], t262: [1], t284: [1], t273: strips.slice(p * per, (p + 1) * per), t279: ifd.t279?.slice(p * per, (p + 1) * per), data: null };
+      this.utif.decodeImage(this.buffer, plane, this.ifds);
+      const d = plane.data;
+      if (!d) throw new Error('no image data');
+      isLE = plane.isLE;
+      for (let i = 0, o = p * bytes; i < n; i++, o += spp * bytes) for (let k = 0; k < bytes; k++) out[o + k] = d[i * bytes + k];
+    }
+    // UTIF reads the samples as interleaved from now on (ifd.data is dropped after use, so the
+    // tag is restored before the page is decoded again).
+    Object.assign(ifd, { data: out, width: w, height: h, isLE, t284: [1], planarRestore: true });
   }
 
   async setPage(n) {
@@ -290,7 +372,9 @@ export class ImageDocument {
     w ||= 1000;
     h ||= 1000;
     // mm / cm / in sizes give the drawing a real paper size (1 CSS px = 1/96 inch).
-    if (lw?.physical || lh?.physical) this.setDpi(96);
+    if (lw?.physical || lh?.physical) this.setDpi({ x: 96, y: 96 }, true);
+    this.pixelWidth = w;
+    this.pixelHeight = h;
     // Explicit pixel size so the browser rasterises it exactly at the size we ask for.
     root.setAttribute('width', String(w));
     root.setAttribute('height', String(h));
@@ -420,14 +504,14 @@ export class ImageDocument {
       const k = Math.min(1, Math.sqrt(maxPixels / (this.width * this.height)));
       return { canvas: this.renderArea(this.bbox, this.width * k, this.height * k), w: this.width, h: this.height };
     }
-    const { level, w, h } = this.decodeTiffPage(n, maxPixels);
-    return { canvas: downscale(level, level.width, level.height).tiles[0].img, w, h };
+    const { level, w, h, dpi } = this.decodeTiffPage(n, maxPixels);
+    return { canvas: downscale(level, level.width, level.height).tiles[0].img, w, h: h * aspect(dpi) };
   }
 
   async thumbnail(n, width = 140) {
     if (this.format === 'TIFF' && n !== this.pageNo) {
-      const { level, w, h } = this.decodeTiffPage(n, 1e6);
-      return downscale(level, width * 2, (width * 2 * h) / w).tiles[0].img;
+      const { level, w, h, dpi } = this.decodeTiffPage(n, 1e6);
+      return downscale(level, width * 2, (width * 2 * h * aspect(dpi)) / w).tiles[0].img;
     }
     return this.pageImage(width * 2);
   }

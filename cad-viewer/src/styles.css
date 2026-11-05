@@ -282,6 +282,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
   .tb-group { padding-inline: 2px; }
   .props-fab { inset-inline-start: auto; inset-inline-end: 12px; width: auto; padding: 0 16px; gap: 6px; border-radius: 22px; font: inherit; font-size: 14px; color: var(--text); }
   .right-open .fab { display: none; }
+  /* The open layers/search drawer covers most of the width: the Properties button would sit on it. */
+  .sidebar.open ~ .stage .props-fab { display: none; }
   .print-grid { grid-template-columns: 1fr; }
   .print-preview { min-height: 200px; }
 }

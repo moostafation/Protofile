@@ -22,7 +22,7 @@ Known formats that cannot be read in a browser (Revit, Navisworks, SolidWorks, I
 ### Features
 - Files are opened on your computer (in the desktop program or inside your browser) and are never uploaded. Pan/zoom (mouse, wheel, touch), zoom extents / window.
 - CAD: layers panel (toggle, isolate), model space and layouts with viewports; lines, polylines, arcs, circles, ellipses, splines, TEXT/MTEXT, blocks with attributes, dimensions, hatches, leaders, tables, wipeouts, linetypes and lineweights.
-- Measure distance, path length and area with endpoint/midpoint/center snapping. PDFs measure in paper millimetres and images in pixels; **Calibrate scale** (two known points) switches both to real metres.
+- Measure distance, path length and area with endpoint/midpoint/center snapping. PDFs measure in paper millimetres; images measure in millimetres when the file states a scan/plot resolution (150 dpi or more, non-square pixels included) and in pixels otherwise; **Calibrate scale** (two known points) switches both to real metres.
 - **Print / export vector PDF**: paper sizes A4–A0 and ANSI, orientation, plot area (extents, view, window), true scale (1:N) or fit, color/monochrome/grayscale, lineweights, title strip, live preview. Arabic and other non-Latin text plots correctly. Images print fitted to the chosen paper and orientation (whole image, current view or a window); PDFs print or download as the original.
 - **Smart tools**: search texts, tags, block names, attribute values and layers; automatic block/cell BOM with attribute breakdown (CSV export); linework length per layer (CSV export).
 - **AI assistant (Claude)**: ask questions in English or Arabic about the drawing, PDF or image. It receives a structured summary of the drawing (for images, the image itself) and optionally an image of the current view, and can search, zoom to and highlight items, and show/hide layers through tool calls.
@@ -88,7 +88,7 @@ tests/        smoke and format tests, fixture generators, fixtures/
 To add a format, add an entry to `src/formats/registry.js` (extensions, category, `open()` or an unsupported `hint`) and list openable extensions in `public/manifest.webmanifest` and in `fileAssociations` of `src-tauri/tauri.conf.json` (tests check that both match the registry). The `3d` category is reserved for 3D models.
 
 ### Known limitations
-SHX fonts are substituted with Arial; 3D solids, raster images and xrefs inside DWG/DXF are not drawn; DWG support depends on LibreDWG, so unusual files may open incomplete (saving as DXF is a workaround). DGN V8 needs an export from MicroStation; DGN dimensions, tags and shared cells are not drawn and 3D DGN files are shown in plan (top) view. HP-GL files with PostScript or raster (PCL) content show only their HP-GL vectors. Very large TIFF scans (over ~48 megapixels) are displayed at reduced resolution; measurements still use the original pixel size.
+SHX fonts are substituted with Arial; 3D solids, raster images and xrefs inside DWG/DXF are not drawn; DWG support depends on LibreDWG, so unusual files may open incomplete (saving as DXF is a workaround). DGN V8 needs an export from MicroStation; DGN dimensions, tags and shared cells are not drawn and 3D DGN files are shown in plan (top) view. HP-GL files with PostScript or raster (PCL) content show only their HP-GL vectors. Very large TIFF pages (over ~32 megapixels) are displayed at reduced resolution (Info says so); measurements still use the original pixel size.
 
 ### License
 GPL-3.0, because DWG reading uses LibreDWG (`@mlightcad/libredwg-web`, GPL-3.0). TIFF decoding uses [UTIF.js](https://github.com/photopea/UTIF.js) (`utif2`, MIT). The test fixtures `smalltest.dgn` and `test_dgnv8.dgn` come from GDAL's autotest data (MIT/X licence).
@@ -110,7 +110,7 @@ ProtoCAD Viewer عارض ذكي للرسومات الهندسية، متاح **�
 ### المميزات
 - الملفات تُفتح على جهازك ولا تُرفع لأي خادم. تكبير وتصغير بعجلة الماوس، سحب للتحريك، لمس بإصبعين على الموبايل، `F` لعرض الرسمة كاملة، وتكبير منطقة محددة.
 - الطبقات (Layers): إظهار/إخفاء، نقرتين لعزل طبقة، ألوان الطبقات وعدد العناصر. مساحة الـ Model والـ Layouts مع عرض محتوى الـ Viewports.
-- **القياس**: مسافة (مع ΔX و ΔY والزاوية)، طول مسار، ومساحة ومحيط، مع التقاط (Snap) للنهايات والمنتصف والمراكز. في ملفات PDF القياس بالمليمتر على الورق، وفي الصور بالبكسل، و**معايرة المقياس** بنقطتين معروفتين تحوّل القياس للمتر الحقيقي (مفيدة جداً للرسومات الممسوحة بالاسكانر).
+- **القياس**: مسافة (مع ΔX و ΔY والزاوية)، طول مسار، ومساحة ومحيط، مع التقاط (Snap) للنهايات والمنتصف والمراكز. في ملفات PDF القياس بالمليمتر على الورق، وفي الصور بالمليمتر لو الملف فيه دقة مسح ضوئي (150 dpi أو أكتر) وإلا بالبكسل، و**معايرة المقياس** بنقطتين معروفتين تحوّل القياس للمتر الحقيقي (مفيدة جداً للرسومات الممسوحة بالاسكانر).
 - **الطباعة وتصدير PDF**: PDF متجه بجودة طباعة (A4 حتى A0 و ANSI، طولي/عرضي، مقياس حقيقي أو ملائمة للورقة، ملون أو أسود أو رمادي، وسُمك الخطوط) مع معاينة. الصور بتتطبع ملائمة لمقاس الورق والاتجاه المختار. النصوص العربية تُطبع بشكل صحيح.
 - **بحث ذكي** عن النصوص والتاجات والبلوكات والطبقات، و**حصر البلوكات (BOM)** وأطوال الخطوط لكل طبقة مع تصدير CSV.
 - **المساعد الذكي (Claude)**: اسأله بالعربي أو الإنجليزي عن الرسمة أو ملف الـ PDF أو الصورة — يلخص، يعمل جدول كميات، يراجع التاجات، ويشرح الجزء الظاهر على الشاشة، ويقدر يبحث ويعمل zoom ويخفي ويظهر الطبقات بنفسه.
@@ -136,7 +136,7 @@ npm test         # اختبارات قراءة الملفات
 ### حدود معروفة
 - خطوط SHX بتتعرض بخط Arial، والمجسمات ثلاثية الأبعاد والصور المرتبطة والـ Xrefs داخل DWG مش بتتعرض.
 - ملفات DGN V8 محتاجة تصدير من MicroStation، والأبعاد (Dimensions) والـ Tags في DGN مش بتتعرض، وملفات DGN ثلاثية الأبعاد بتتعرض من أعلى (Plan).
-- ملفات TIFF الضخمة جداً (أكبر من حوالي 48 ميجا بكسل) بتتعرض بدقة أقل، لكن القياس بيفضل بأبعاد البكسل الأصلية.
+- ملفات TIFF الضخمة جداً (أكبر من حوالي 32 ميجا بكسل) بتتعرض بدقة أقل، لكن القياس بيفضل بأبعاد البكسل الأصلية.
 
 ### الترخيص
 البرنامج مرخص **GPL-3.0** لأنه بيستخدم LibreDWG. قراءة TIFF عن طريق UTIF.js (رخصة MIT)، وملفات اختبار DGN من GDAL (رخصة MIT/X).
