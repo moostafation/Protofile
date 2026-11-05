@@ -1,11 +1,19 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "enables the default permissions",
-  "windows": [
-    "main"
-  ],
+  "description": "What the ProtoCAD Viewer page may do: listen to app events (menu, files to open, drag & drop, recent files) and call the app's own file commands. There is no general file system, shell or opener access: the commands only read files the user chose and write where the user chose in a Save dialog.",
+  "windows": ["main"],
+  "platforms": ["windows", "linux", "macOS"],
   "permissions": [
-    "core:default"
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-pick-file",
+    "allow-read-file",
+    "allow-take-pending",
+    "allow-save-file",
+    "allow-print-pdf",
+    "allow-recent-files",
+    "allow-add-recent",
+    "allow-clear-recent"
   ]
 }

@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "ProtoCAD Viewer",
-  "version": "0.1.0",
-  "identifier": "com.tauri.dev",
+  "version": "../package.json",
+  "identifier": "com.protocad.viewer",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
@@ -10,31 +10,189 @@
     "beforeBuildCommand": "npm run build"
   },
   "app": {
-    "windows": [
-      {
-        "title": "ProtoCAD Viewer",
-        "width": 800,
-        "height": 600,
-        "resizable": true,
-        "fullscreen": false
-      }
-    ],
+    "windows": [],
     "security": {
-      "csp": null
+      "csp": {
+        "default-src": "'self'",
+        "script-src": "'self' 'wasm-unsafe-eval'",
+        "worker-src": "'self' blob:",
+        "style-src": "'self' 'unsafe-inline'",
+        "img-src": "'self' blob: data:",
+        "font-src": "'self' data:",
+        "connect-src": "'self' ipc: http://ipc.localhost https://api.anthropic.com",
+        "media-src": "'none'",
+        "object-src": "'none'",
+        "frame-src": "'none'",
+        "base-uri": "'self'",
+        "form-action": "'none'"
+      },
+      "dangerousDisableAssetCspModification": [
+        "style-src"
+      ],
+      "capabilities": [
+        "default"
+      ]
     }
   },
   "bundle": {
     "active": true,
     "targets": "all",
+    "category": "Utility",
+    "shortDescription": "Viewer for DWG, DXF, DGN, HP-GL, PDF and image files",
+    "longDescription": "ProtoCAD Viewer opens AutoCAD DWG/DXF, MicroStation DGN V7, HP-GL plot files, PDFs and images, with layers, measuring, vector PDF printing, search, block BOM and an AI assistant.",
+    "license": "GPL-3.0",
+    "publisher": "ProtoCAD",
     "icon": [
       "icons/32x32.png",
+      "icons/64x64.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "android": {
-      "debugApplicationIdSuffix": ".debug"
+    "fileAssociations": [
+      {
+        "ext": [
+          "dwg",
+          "dwt",
+          "dws"
+        ],
+        "name": "ProtoCAD.DWG",
+        "description": "AutoCAD drawing",
+        "mimeType": "image/vnd.dwg",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "dxf"
+        ],
+        "name": "ProtoCAD.DXF",
+        "description": "DXF drawing",
+        "mimeType": "image/vnd.dxf",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "dgn"
+        ],
+        "name": "ProtoCAD.DGN",
+        "description": "MicroStation DGN drawing",
+        "mimeType": "application/x-dgn",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "plt",
+          "hpgl",
+          "hgl",
+          "hp2",
+          "pen"
+        ],
+        "name": "ProtoCAD.PLT",
+        "description": "HP-GL plot file",
+        "mimeType": "application/vnd.hp-hpgl",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "pdf"
+        ],
+        "name": "ProtoCAD.PDF",
+        "description": "PDF document",
+        "mimeType": "application/pdf",
+        "role": "Viewer",
+        "rank": "Alternate"
+      },
+      {
+        "ext": [
+          "png"
+        ],
+        "name": "ProtoCAD.PNG",
+        "description": "PNG image",
+        "mimeType": "image/png",
+        "role": "Viewer",
+        "rank": "Alternate"
+      },
+      {
+        "ext": [
+          "jpg",
+          "jpeg"
+        ],
+        "name": "ProtoCAD.JPEG",
+        "description": "JPEG image",
+        "mimeType": "image/jpeg",
+        "role": "Viewer",
+        "rank": "Alternate"
+      },
+      {
+        "ext": [
+          "gif"
+        ],
+        "name": "ProtoCAD.GIF",
+        "description": "GIF image",
+        "mimeType": "image/gif",
+        "role": "Viewer",
+        "rank": "Alternate"
+      },
+      {
+        "ext": [
+          "bmp"
+        ],
+        "name": "ProtoCAD.BMP",
+        "description": "BMP image",
+        "mimeType": "image/bmp",
+        "role": "Viewer",
+        "rank": "Alternate"
+      },
+      {
+        "ext": [
+          "webp"
+        ],
+        "name": "ProtoCAD.WEBP",
+        "description": "WebP image",
+        "mimeType": "image/webp",
+        "role": "Viewer",
+        "rank": "Alternate"
+      },
+      {
+        "ext": [
+          "svg"
+        ],
+        "name": "ProtoCAD.SVG",
+        "description": "SVG image",
+        "mimeType": "image/svg+xml",
+        "role": "Viewer",
+        "rank": "Alternate"
+      },
+      {
+        "ext": [
+          "tif",
+          "tiff"
+        ],
+        "name": "ProtoCAD.TIFF",
+        "description": "TIFF image",
+        "mimeType": "image/tiff",
+        "role": "Viewer",
+        "rank": "Alternate"
+      }
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "embedBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico"
+      }
+    },
+    "linux": {
+      "deb": {
+        "desktopTemplate": "linux/protocad-viewer.desktop"
+      },
+      "rpm": {
+        "desktopTemplate": "linux/protocad-viewer.desktop"
+      }
     }
   }
 }
