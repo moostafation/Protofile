@@ -168,10 +168,39 @@ const STRINGS = {
   unitsPaper: 'mm on paper',
   warnings: 'Unsupported objects',
   dropHere: 'Drop the file to open it',
+  recentFiles: 'Recent files',
+  clearRecent: 'Clear',
+  allSupported: 'All supported files',
+  allFiles: 'All files',
+  pdfFile: 'PDF document',
+  csvFile: 'CSV file',
+  savedTo: 'Saved to',
+  saveFailed: 'Could not save the file',
+  printOpened: 'The PDF opened in your PDF app. Print it from there; choose "Actual size" to keep a true scale.',
+  printDesktopHint: 'Print opens the PDF in your PDF app, where you choose the printer.',
+  formatsTitle: 'Supported formats',
+  formatsOpen: 'Opens',
+  formatsExplained: 'Recognised, with export advice',
   clickToZoom: 'Click to zoom',
   copy: 'Copy',
   copied: 'Copied',
 };
+
+// The desktop program reads files from disk instead of a browser.
+const DESKTOP = {
+  privacy: 'Files are opened on this computer and are never uploaded to a server.',
+  unsupportedTitle: '{fmt} files cannot be opened in ProtoCAD Viewer',
+  unsupportedMore: 'This is a closed format with no reliable way to read it outside its own program. Export the file from the original program, then open the exported file here.',
+  hint_dgnV8: 'This is a MicroStation DGN V8 file, which cannot be read here (DGN V7 is supported). In MicroStation use Save As and choose DWG or DXF, or save as DGN V7.',
+  downloadPdf: 'Save PDF…',
+  downloadOriginal: 'Save a copy…',
+  apiKeyHint: 'The key is stored only on this computer and requests go directly from your device to Anthropic. Get a key at console.anthropic.com',
+};
+
+/** Switches to the desktop program's wording. */
+export function useDesktopStrings() {
+  Object.assign(STRINGS, DESKTOP);
+}
 
 export function t(key) {
   return STRINGS[key] ?? key;

@@ -230,10 +230,10 @@ pub async fn print_pdf(app: AppHandle, request: Request<'_>) -> Result<(), Strin
         let path = if n == 1 { dir.join(&name) } else { dir.join(format!("{} ({n}).pdf", name.trim_end_matches(".pdf"))) };
         match std::fs::write(&path, bytes) {
             Ok(()) => {
-                return app
-                    .opener()
-                    .open_path(path_string(&path)?, None::<&str>)
-                    .map_err(|e| format!("No app to open PDF files was found ({e}). Save the PDF and print it from a PDF reader."));
+                return app.opener().open_path(path_string(&path)?, None::<&str>).map_err(|err| {
+                    eprintln!("Could not open {}: {err}", path.display());
+                    "No app for PDF files was found to print with. Save the PDF and print it from a PDF reader.".to_string()
+                });
             }
             Err(err) => last_err = Some(err),
         }

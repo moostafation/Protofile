@@ -172,6 +172,18 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 .welcome h1 { margin: 10px 0 4px; font-size: 26px; }
 .welcome .lead { color: var(--accent); font-weight: 600; margin-top: 0; }
 .welcome-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin: 18px 0; }
+.recent { text-align: start; margin: 0 0 16px; }
+.recent-head { display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: 13px; margin-bottom: 4px; }
+.recent-list { list-style: none; margin: 0; padding: 0; max-height: 240px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+.recent-list button {
+  display: flex; flex-direction: column; gap: 2px; width: 100%; padding: 7px 10px; border: 0; border-bottom: 1px solid var(--line);
+  background: none; color: inherit; font: inherit; text-align: start; cursor: pointer;
+}
+.recent-list li:last-child button { border-bottom: 0; }
+.recent-list button:hover, .recent-list button:focus-visible { background: var(--panel-2); }
+.recent-list .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-list .dir { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.props.formats { padding: 0; margin: 4px 0 8px; }
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 9px 16px; border-radius: var(--radius);
   border: 1px solid var(--line); background: var(--panel-2); cursor: pointer; font-weight: 600;

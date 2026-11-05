@@ -93,6 +93,10 @@
               <button class="btn primary" data-action="open"><i data-icon="open"></i><span data-i18n="open"></span></button>
               <button class="btn" data-action="sample"><i data-icon="blocks"></i><span data-i18n="sample"></span></button>
             </div>
+            <div class="recent" id="recentFiles" hidden>
+              <div class="recent-head"><span data-i18n="recentFiles"></span><button type="button" class="mini" id="recentClear" data-i18n="clearRecent"></button></div>
+              <ul class="recent-list" id="recentList"></ul>
+            </div>
             <p class="muted small" id="formatsText"></p>
             <p class="muted small" data-i18n="privacy"></p>
           </div>
@@ -158,6 +162,7 @@
         <div class="print-preview"><canvas id="pPreview"></canvas><div class="muted small" id="pInfo"></div></div>
       </div>
       <div class="pdf-print" id="pdfPrint" hidden><p data-i18n="pdfPrintHint"></p></div>
+      <p class="muted small" id="pDesktopHint" data-i18n="printDesktopHint" hidden></p>
       <div class="dialog-actions">
         <button value="cancel" class="btn" data-i18n="cancel"></button>
         <span class="spacer"></span>
@@ -218,6 +223,17 @@
         <button value="cancel" class="btn" data-i18n="cancel"></button>
         <span class="spacer"></span>
         <button value="save" class="btn primary" id="sSave" data-i18n="save"></button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="formatsDialog" class="dialog">
+    <form method="dialog" class="dialog-body">
+      <h2 data-i18n="formatsTitle"></h2>
+      <dl class="props formats" id="formatsList"></dl>
+      <div class="dialog-actions">
+        <span class="spacer"></span>
+        <button value="ok" class="btn primary" data-i18n="ok"></button>
       </div>
     </form>
   </dialog>

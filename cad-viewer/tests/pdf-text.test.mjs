@@ -40,4 +40,21 @@ check('visual-order Arabic lines are restored to logical order', () => {
   assert.equal(findInLines(vlines, 'المياه').length, 1);
 });
 await visual.loadingTask.destroy();
+
+// Correctly ordered right-to-left text must never be reversed (pdf.js gives logical order for
+// whole-word items): words ending in "لا" are common in Persian and Arabic.
+const item = (str, x, y, w = 60) => ({ str, transform: [10, 0, 0, 10, x, y], width: w, height: 10, dir: 'rtl', hasEOL: false });
+check('Persian text stays in logical order', () => {
+  const lines = buildLines([item('تراز بالا', 100, 700), { ...item('EL+3.50', 20, 700, 40), dir: 'ltr' }]);
+  assert.deepEqual(lines.map((l) => l.text), ['تراز بالا EL+3.50']);
+  assert.equal(findInLines(lines, 'بالا').length, 1);
+});
+check('Arabic labels ending in "لا" (مثلا، أولا، فعلا) stay in logical order', () => {
+  const page = [item('مثلا', 100, 700), item('أولا', 100, 650), item('فعلا', 100, 600), item('يركب الصمام أولا', 100, 550, 90), item('مثلا ركب الخط', 100, 500, 90)];
+  assert.deepEqual(buildLines(page).map((l) => l.text), ['مثلا', 'أولا', 'فعلا', 'يركب الصمام أولا', 'مثلا ركب الخط']);
+});
+check('a page of reversed words (starting with ة) is restored', () => {
+  const lines = buildLines([item('ةخضم', 100, 700), item('ةباوب مامص', 100, 650)]);
+  assert.deepEqual(lines.map((l) => l.text), ['مضخة', 'صمام بوابة']);
+});
 process.exit(failed ? 1 : 0);

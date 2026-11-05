@@ -288,5 +288,18 @@ test('manifest file_handlers list exactly the openable extensions', () => {
   assert.deepEqual([...listed].sort(), [...new Set(openableExtensions())].sort());
 });
 
+test('desktop file associations (src-tauri/tauri.conf.json) list exactly the openable extensions', () => {
+  const conf = JSON.parse(fs.readFileSync(path.join(here, '..', 'src-tauri', 'tauri.conf.json'), 'utf8'));
+  const assoc = conf.bundle.fileAssociations;
+  const exts = assoc.flatMap((a) => a.ext);
+  assert.equal(new Set(exts).size, exts.length, 'no extension is associated twice');
+  assert.deepEqual([...exts].sort(), [...new Set(openableExtensions())].sort());
+  // Windows uses `name` as the registry class (ProgID) and `description` in Explorer; Linux needs a MIME type.
+  for (const a of assoc) {
+    assert.match(a.name, /^ProtoCAD\.[A-Z]+$/, `${a.ext} has a ProtoCAD class name`);
+    assert.ok(a.description && a.mimeType, `${a.ext} has a description and a MIME type`);
+  }
+});
+
 console.log(`${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

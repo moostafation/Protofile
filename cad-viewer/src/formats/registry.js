@@ -1,7 +1,8 @@
 // Every file type the app knows: extensions, category, how to open it, and for
 // formats that cannot be opened in the browser, which export to ask for instead.
 // Used by openFile, the file picker `accept`, drag & drop and the welcome screen;
-// public/manifest.webmanifest (file_handlers) lists the same openable extensions.
+// public/manifest.webmanifest (file_handlers) and src-tauri/tauri.conf.json (fileAssociations)
+// list the same openable extensions (tests/formats.test.mjs checks both).
 import { loadCad } from '../cad/loader.js';
 import { FormatError } from './errors.js';
 
@@ -121,6 +122,17 @@ export function acceptAttribute() {
 /** Extensions that the app can open (for manifest file_handlers). */
 export function openableExtensions() {
   return FORMATS.filter((f) => f.open).flatMap((f) => f.exts);
+}
+
+/** Openable extensions grouped by category (for the desktop Open dialog's file type filters). */
+export function openableByCategory() {
+  const groups = new Map();
+  for (const f of FORMATS) {
+    if (!f.open) continue;
+    if (!groups.has(f.category)) groups.set(f.category, []);
+    groups.get(f.category).push(...f.exts);
+  }
+  return [...groups.entries()].map(([category, extensions]) => ({ category, extensions }));
 }
 
 /** Labels of openable formats grouped by category, for the welcome screen. */

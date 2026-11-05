@@ -1,12 +1,13 @@
 {
   "name": "protocad-viewer",
   "version": "1.0.0",
-  "description": "AutoCAD DWG/DXF and PDF viewer with PDF printing and an AI assistant",
+  "description": "Viewer for AutoCAD DWG/DXF, MicroStation DGN, HP-GL, PDF and image files, with PDF printing and an AI assistant (web app and desktop program)",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node tests/scene.test.mjs public/samples/plant.dxf && node tests/formats.test.mjs && node tests/pdf-text.test.mjs"
+    "test": "node tests/scene.test.mjs public/samples/plant.dxf && node tests/formats.test.mjs && node tests/pdf-text.test.mjs",
+    "tauri": "tauri"
   },
   "keywords": [],
   "author": "",

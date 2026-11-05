@@ -14,22 +14,33 @@ export function searchKey(s) {
 
 const display = (s) => s.normalize('NFKC').replace(/\s+/g, ' ');
 
-// Arabic's definite article starts many words ("ال…"); text stored in visual order shows it reversed at word ends.
-const AL_START = /(^|[^\u0621-\u064a])\u0627\u0644(?=[\u0621-\u064a])/g;
-const AL_END = /(?<=[\u0621-\u064a])\u0644\u0627($|[^\u0621-\u064a])/g;
-const LTR_RUN = /[A-Za-z0-9][A-Za-z0-9 .,:;/()\-_+#%]*[A-Za-z0-9]|[A-Za-z0-9]/g;
+// Arabic words (Arabic and Persian letters).
+const WORD = /[\u0621-\u064a\u0671-\u06d3]{2,}/g;
+// Letters that only end Arabic words (ة, ى) or only start them (إ): a word that starts with
+// ة/ى or ends with إ is strong evidence of text stored in visual (reversed) order.
+const ONLY_FINAL = /[\u0629\u0649]/;
+const ONLY_INITIAL = '\u0625';
 
-/** True when the page's multi-letter right-to-left items are stored in visual (reversed) order. */
-function visualOrder(items) {
+/**
+ * True when the page's multi-letter right-to-left items are stored in visual (reversed) order.
+ * Only letters that cannot start (ة, ى) or end (إ) a word count as evidence of reversal, so
+ * correctly ordered text is never reversed because of words that happen to end in "لا"
+ * (مثلا, أولا, Persian بالا…). The article "ال" at word starts counts as evidence of logical order.
+ */
+export function visualOrder(items) {
   let logical = 0, visual = 0;
   for (const it of items) {
     if (!it.str || !RTL.test(it.str)) continue;
-    const s = it.str.normalize('NFKC');
-    logical += (s.match(AL_START) || []).length;
-    visual += (s.match(AL_END) || []).length;
+    for (const w of it.str.normalize('NFKC').match(WORD) || []) {
+      const first = w[0], last = w[w.length - 1];
+      if (ONLY_FINAL.test(first) || last === ONLY_INITIAL) visual++;
+      if (ONLY_FINAL.test(last) || first === ONLY_INITIAL || (w.length > 3 && w.startsWith('\u0627\u0644'))) logical++;
+    }
   }
-  return visual > logical;
+  return visual > 2 * logical;
 }
+
+const LTR_RUN = /[A-Za-z0-9][A-Za-z0-9 .,:;/()\-_+#%]*[A-Za-z0-9]|[A-Za-z0-9]/g;
 
 /** Visual-order text to logical order: reverse it, then restore the left-to-right runs. */
 function toLogical(s) {

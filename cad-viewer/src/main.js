@@ -1,11 +1,12 @@
 import './styles.css';
-import { t } from './i18n.js';
+import { t, useDesktopStrings } from './i18n.js';
+import * as platform from './platform.js';
 import { fillIcons, icon } from './ui/icons.js';
 import { renderMarkdown } from './ui/markdown.js';
 import { Viewer } from './render/viewer.js';
 import { CadRenderer, measureText, colorCss } from './render/cad-renderer.js';
 import { PAPERS, exportPdf, exportImagePdf, planPlot } from './render/pdf-export.js';
-import { resolveFormat, openBuffer, acceptAttribute, supportedGroups, formatFor, SNIFF_BYTES } from './formats/registry.js';
+import { resolveFormat, openBuffer, acceptAttribute, supportedGroups, formatFor, SNIFF_BYTES, FORMATS, openableExtensions, openableByCategory } from './formats/registry.js';
 import { FormatError } from './formats/errors.js';
 import { buildScene, STROKE } from './cad/scene.js';
 import { UNIT_NAMES } from './cad/drawing.js';
@@ -165,6 +166,7 @@ const nextFrame = () => new Promise((r) => requestAnimationFrame(() => setTimeou
 /**
  * Opens any File-like object ({ name, arrayBuffer() }): picker, drag & drop, OS file handling.
  * The format comes from the registry (extension, corrected by the file's first bytes).
+ * Resolves to true when the file is shown.
  */
 let openSeq = 0;
 async function openFile(file) {
@@ -173,22 +175,22 @@ async function openFile(file) {
   const current = () => my === openSeq;
   const name = file.name || 'drawing';
   const known = formatFor(name);
-  if (known?.category === 'unsupported') { showUnsupported(known.hint, known.label); return; }
+  if (known?.category === 'unsupported') { showUnsupported(known.hint, known.label); return false; }
   showLoading(t('loading'));
   try {
     const buffer = await file.arrayBuffer();
-    if (!current()) return;
+    if (!current()) return false;
     const format = resolveFormat(name, new Uint8Array(buffer, 0, Math.min(buffer.byteLength, SNIFF_BYTES)));
     if (!format) {
       toast(t('unsupported'), true, 6000);
-      return;
+      return false;
     }
     const result = await openBuffer(format, buffer, name);
-    if (!current()) { result.sheet?.dispose?.(); return; }
+    if (!current()) { result.sheet?.dispose?.(); return false; }
     if (result.kind === 'cad') {
       showLoading(t('building'));
       await nextFrame();
-      if (!current()) return;
+      if (!current()) return false;
       setCadDoc(result.drawing);
       if (result.drawing.warnings.includes('truncated')) toast(t('fileTruncated'), false, 7000);
       if (result.drawing.warnings.includes('limit')) toast(t('fileTooLarge'), false, 7000);
@@ -196,16 +198,44 @@ async function openFile(file) {
       setSheetDoc(result.kind, result.sheet);
     }
     document.title = `${name} – ProtoCAD Viewer`;
+    return true;
   } catch (err) {
-    if (!current()) return;
+    if (!current()) return false;
     // Unreadable files are expected; only unexpected failures are logged as errors.
     if (err instanceof FormatError) console.warn(err.message);
     else console.error(err);
     if (err?.hint && err.hint !== 'unknown') showUnsupported(err.hint, err.label || formatFor(name)?.label);
     else toast(`${t('loadError')}: ${err?.message || err}`, true, 7000);
+    return false;
   } finally {
     if (current()) showLoading(null);
   }
+}
+
+/** Opens a file from disk (desktop) and adds it to the recent files once it is shown. */
+async function openDiskFile(file) {
+  if (await openFile(file)) platform.addRecent(file.path);
+}
+
+/** Files handed over by the system (drag & drop, double-click, Open with): the first one opens. */
+function openHandedFiles(files) {
+  (platform.isDesktop ? openDiskFile : openFile)(files[0]);
+  if (files.length > 1) toast(t('oneFileAtATime'), false, 5000);
+}
+
+/** File type filters of the desktop Open dialog, from the format registry. */
+function openFilters() {
+  return [
+    { name: t('allSupported'), extensions: openableExtensions() },
+    ...openableByCategory().map((g) => ({ name: `${t('fmt_' + g.category)} (${g.extensions.map((e) => e.toUpperCase()).join(', ')})`, extensions: g.extensions })),
+    { name: t('allFiles'), extensions: ['*'] },
+  ];
+}
+
+/** Toolbar, Ctrl+O and File > Open: the native Open dialog on desktop, the file input on the web. */
+function chooseFile() {
+  if (!platform.isDesktop) { $('#fileInput').click(); return; }
+  platform.openDialog(openFilters()).then((file) => file && openDiskFile(file), (err) => toast(`${t('loadError')}: ${err.message}`, true, 7000));
 }
 
 /** Explains why a known format cannot be opened and which export to use instead. */
@@ -224,6 +254,9 @@ function makeSpace(drawing, name, entities, isLayout) {
 }
 
 function resetDocState() {
+  // A file opened from outside (menu, Explorer, drag & drop) replaces the document under any
+  // dialog that belongs to the previous one.
+  for (const id of ['#printDialog', '#calibrateDialog']) if ($(id).open) $(id).close();
   activeSheet()?.dispose?.();
   state.selection = [];
   state.highlights = [];
@@ -933,8 +966,10 @@ $('#settingsDialog').addEventListener('close', () => {
 });
 
 // ---------------------------------------------------------------- printing
-function openPrint() {
+/** The print dialog; `toSave` (File > Export PDF) puts the focus on the save button. */
+function openPrint(toSave = false) {
   const dlg = $('#printDialog');
+  if (dlg.open) return;
   const kind = state.doc.kind;
   const isPdf = kind === 'pdf';
   $('.print-grid', dlg).hidden = isPdf;
@@ -943,6 +978,7 @@ function openPrint() {
   for (const el of $$('[data-print="cad"]', dlg)) el.hidden = kind !== 'cad';
   $('[data-print="pages"]', dlg).hidden = !(kind === 'image' && state.doc.sheet.pageCount > 1);
   $('#pDownload span').textContent = isPdf ? t('downloadOriginal') : t('downloadPdf');
+  $('#pDesktopHint').hidden = !platform.isDesktop;
   if (!isPdf) {
     const p = state.print;
     $('#pPaper').innerHTML = Object.keys(PAPERS).map((k) => `<option>${k}</option>`).join('');
@@ -957,6 +993,7 @@ function openPrint() {
   }
   dlg.showModal();
   if (!isPdf) updatePrintPreview();
+  if (toSave) $('#pDownload').focus();
 }
 
 function readPrintOptions() {
@@ -1058,34 +1095,18 @@ function pdfFileName() {
   return `${base}${sp?.isLayout ? '-' + sp.name : ''}.pdf`;
 }
 
-function printBlob(blob) {
-  const url = URL.createObjectURL(blob);
-  const frame = document.createElement('iframe');
-  frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
-  frame.src = url;
-  document.body.append(frame);
-  frame.onload = () => {
-    setTimeout(() => {
-      try {
-        frame.contentWindow.focus();
-        frame.contentWindow.print();
-      } catch {
-        window.open(url, '_blank');
-      }
-    }, 250);
-  };
-  setTimeout(() => { frame.remove(); URL.revokeObjectURL(url); }, 120000);
-}
+const pdfFilters = () => [{ name: t('pdfFile'), extensions: ['pdf'] }];
+const csvFilters = () => [{ name: t('csvFile'), extensions: ['csv'] }];
 
-function download(blob, name) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  document.body.append(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 30000);
+/** Saves an export: Save dialog on desktop (then says where it went), a download on the web. */
+async function saveAs(blob, name, filters) {
+  try {
+    const path = await platform.saveFile(blob, name, filters);
+    if (path) toast(`${t('savedTo')} ${path}`, false, 6000);
+  } catch (err) {
+    console.error(err);
+    toast(`${t('saveFailed')}: ${err?.message || err}`, true, 7000);
+  }
 }
 
 $('#printOptions').addEventListener('change', (ev) => {
@@ -1105,36 +1126,41 @@ $('#printOptions').addEventListener('change', (ev) => {
 });
 
 /** Runs a print/export step, reporting failures (memory, blocked image data…) instead of failing silently. */
-function guarded(fn) {
+async function guarded(fn) {
   try {
-    fn();
+    await fn();
   } catch (err) {
     console.error(err);
     toast(`${t('printFailed')}: ${err?.message || err}`, true, 7000);
   }
 }
 
-$('#pDownload').addEventListener('click', () => guarded(() => {
+$('#pDownload').addEventListener('click', () => guarded(async () => {
   if (state.doc.kind === 'pdf') {
-    download(new Blob([state.doc.sheet.buffer], { type: 'application/pdf' }), state.doc.sheet.fileName);
+    await saveAs(new Blob([state.doc.sheet.buffer], { type: 'application/pdf' }), state.doc.sheet.fileName, pdfFilters());
     return;
   }
-  makePlotPdf().save(pdfFileName());
+  await saveAs(makePlotPdf().output('blob'), pdfFileName(), pdfFilters());
 }));
 
-$('#pPrint').addEventListener('click', () => guarded(() => {
-  if (state.doc.kind === 'pdf') {
-    printBlob(new Blob([state.doc.sheet.buffer], { type: 'application/pdf' }));
-  } else {
-    printBlob(makePlotPdf().output('blob'));
+$('#pPrint').addEventListener('click', () => guarded(async () => {
+  const isPdf = state.doc.kind === 'pdf';
+  const blob = isPdf ? new Blob([state.doc.sheet.buffer], { type: 'application/pdf' }) : makePlotPdf().output('blob');
+  try {
+    await platform.printPdf(blob, isPdf ? state.doc.sheet.fileName : pdfFileName());
+  } catch (err) {
+    // The PDF exists; only handing it to the PDF app failed (the message says what to do).
+    toast(err?.message || String(err), true, 9000);
+    return;
   }
   $('#printDialog').close();
+  if (platform.isDesktop) toast(t('printOpened'), false, 8000);
 }));
 
 // ---------------------------------------------------------------- event wiring
 function onAction(action, el) {
   switch (action) {
-    case 'open': $('#fileInput').click(); break;
+    case 'open': chooseFile(); break;
     case 'sample': openSample(); break;
     case 'extents': viewer.zoomExtents(); break;
     case 'zoomWindow': setTool(currentTool === 'zoomWindow' ? 'select' : 'zoomWindow'); break;
@@ -1152,12 +1178,12 @@ function onAction(action, el) {
     case 'layersNone': state.hidden = new Set(state.doc.drawing.layers.keys()); layersChanged(); break;
     case 'layersCsv': {
       const sp = state.doc.spaces[0];
-      download(new Blob(['﻿' + layersCsv(sp.analysis, UNIT_NAMES[state.doc.drawing.units])], { type: 'text/csv' }), pdfFileName().replace(/\.pdf$/, '-layers.csv'));
+      saveAs(new Blob(['﻿' + layersCsv(sp.analysis, UNIT_NAMES[state.doc.drawing.units])], { type: 'text/csv' }), pdfFileName().replace(/\.pdf$/, '-layers.csv'), csvFilters());
       break;
     }
     case 'bomCsv': {
       const sp = activeSpace();
-      download(new Blob(['﻿' + bomCsv(sp.analysis)], { type: 'text/csv' }), pdfFileName().replace(/\.pdf$/, '-BOM.csv'));
+      saveAs(new Blob(['﻿' + bomCsv(sp.analysis)], { type: 'text/csv' }), pdfFileName().replace(/\.pdf$/, '-BOM.csv'), csvFilters());
       break;
     }
     case 'aiNew': assistant.reset(); showAiIntro(); break;
@@ -1221,7 +1247,7 @@ document.addEventListener('keydown', (ev) => {
   const mod = ev.ctrlKey || ev.metaKey;
   if (mod && !ev.altKey && !ev.target.closest('dialog')) {
     const k = ev.key.toLowerCase();
-    if (k === 'o') { ev.preventDefault(); $('#fileInput').click(); return; }
+    if (k === 'o') { ev.preventDefault(); chooseFile(); return; }
     if (k === 'p' && state.doc) { ev.preventDefault(); openPrint(); return; }
     if (k === 'f' && state.doc) { ev.preventDefault(); setSideTab('search', true); $('#sidebar').classList.add('open'); return; }
   }
@@ -1242,27 +1268,88 @@ document.addEventListener('keydown', (ev) => {
   else if (ev.key === 'PageUp' && activeSheet()) gotoPage(activeSheet().pageNo - 1);
 });
 
-// Drag and drop
+// Drag and drop. The desktop program receives dropped files natively (with their paths,
+// for recent files) and reports the drag state; the page only stops the webview's default.
 let dragDepth = 0;
-window.addEventListener('dragenter', (ev) => { if (ev.dataTransfer?.types?.includes('Files')) { dragDepth++; document.body.classList.add('dragging'); } });
-window.addEventListener('dragleave', () => { dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) document.body.classList.remove('dragging'); });
 window.addEventListener('dragover', (ev) => ev.preventDefault());
-window.addEventListener('drop', (ev) => {
-  ev.preventDefault();
-  dragDepth = 0;
-  document.body.classList.remove('dragging');
-  const files = ev.dataTransfer?.files;
-  if (!files?.length) return;
-  openFile(files[0]);
-  if (files.length > 1) toast(t('oneFileAtATime'), false, 5000);
-});
-
-// Files opened from the OS when installed as an app (PWA file handling).
-if ('launchQueue' in window) {
-  window.launchQueue.setConsumer(async (params) => {
-    const handle = params.files?.[0];
-    if (handle) openFile(await handle.getFile());
+if (platform.isDesktop) {
+  window.addEventListener('drop', (ev) => ev.preventDefault());
+  platform.onDragState((on) => document.body.classList.toggle('dragging', on));
+} else {
+  window.addEventListener('dragenter', (ev) => { if (ev.dataTransfer?.types?.includes('Files')) { dragDepth++; document.body.classList.add('dragging'); } });
+  window.addEventListener('dragleave', () => { dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) document.body.classList.remove('dragging'); });
+  window.addEventListener('drop', (ev) => {
+    ev.preventDefault();
+    dragDepth = 0;
+    document.body.classList.remove('dragging');
+    const files = ev.dataTransfer?.files;
+    if (files?.length) openHandedFiles([...files]);
   });
+}
+
+// Files opened from the operating system: double-click / Open with (desktop program) or
+// PWA file handling (installed web app).
+platform.onOpenFiles(openHandedFiles);
+
+// ---------------------------------------------------------------- desktop program
+/** Native menu (src-tauri/src/menu.rs): the same actions as the toolbar. */
+function onMenu(id) {
+  if (id.startsWith('theme:')) { setTheme(id.slice(6)); return; }
+  if ($('dialog[open]')) return; // finish the open dialog first
+  if (id === 'open') chooseFile();
+  else if (id === 'formats') showFormats();
+  else if (!state.doc) return;
+  else if (id === 'print') openPrint();
+  else if (id === 'export-pdf') openPrint(true);
+  else if (id === 'zoom-extents') viewer.zoomExtents();
+  else if (id === 'zoom-in') viewer.zoomAt(1.5);
+  else if (id === 'zoom-out') viewer.zoomAt(1 / 1.5);
+}
+
+function setTheme(name) {
+  if (!THEMES[name]) return;
+  state.theme = name;
+  saveUiPrefs();
+  viewer.setTheme(THEMES[name]);
+}
+
+/** Help > Supported formats: what opens, and what is recognised with export advice. */
+function showFormats() {
+  const item = (f) => `${escapeHtml(f.label)} <span class="muted">${f.exts.map((e) => '.' + e).join(' ')}</span>`;
+  const groups = new Map();
+  for (const f of FORMATS) {
+    const key = f.open ? 'fmt_' + f.category : 'formatsExplained';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item(f));
+  }
+  $('#formatsList').innerHTML = [...groups].map(([key, items]) => `<dt>${escapeHtml(t(key))}</dt><dd>${items.join('<br>')}</dd>`).join('');
+  $('#formatsDialog').showModal();
+}
+
+/** Recent files on the welcome screen (desktop). */
+function renderRecent(paths) {
+  const ul = $('#recentList');
+  ul.innerHTML = '';
+  for (const path of paths) {
+    const name = path.split(/[\\/]/).pop();
+    const li = document.createElement('li');
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.title = path;
+    b.innerHTML = `<bdi class="name">${escapeHtml(name)}</bdi><bdi class="dir">${escapeHtml(path.slice(0, path.length - name.length).replace(/[\\/]$/, ''))}</bdi>`;
+    b.addEventListener('click', () => openDiskFile(platform.readPath(path)));
+    li.append(b);
+    ul.append(li);
+  }
+  $('#recentFiles').hidden = !paths.length;
+}
+
+function initDesktop() {
+  document.documentElement.classList.add('desktop');
+  platform.onMenu(onMenu);
+  platform.onRecentChange(renderRecent);
+  platform.recentFiles().then(renderRecent, (err) => console.warn(err));
+  $('#recentClear').addEventListener('click', () => platform.clearRecent());
 }
 
 async function openSample() {
@@ -1292,6 +1379,7 @@ function escapeHtml(s) {
 }
 
 // ---------------------------------------------------------------- start
+if (platform.isDesktop) useDesktopStrings();
 $('#fileInput').accept = acceptAttribute();
 fillIcons();
 applyI18n();
@@ -1299,8 +1387,7 @@ updateNeeds();
 viewer.setTheme(THEMES[state.theme]);
 setTool('select');
 showProperties();
+if (platform.isDesktop) initDesktop();
 if (new URLSearchParams(location.search).has('sample')) openSample();
-if ('serviceWorker' in navigator && import.meta.env.PROD) {
-  navigator.serviceWorker.register(new URL('sw.js', document.baseURI)).catch(() => {});
-}
+platform.registerServiceWorker();
 window.protocad = { state, viewer, openFile };
