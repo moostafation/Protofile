@@ -1,0 +1,35 @@
+[package]
+name = "protocad-viewer"
+# The app version comes from ../package.json (tauri.conf.json "version"); this one only names the crate.
+version = "1.0.0"
+description = "ProtoCAD Viewer desktop shell"
+authors = ["ProtoCAD"]
+license = "GPL-3.0"
+edition = "2024"
+rust-version = "1.90"
+publish = false
+
+[lib]
+name = "protocad_viewer_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "=2.7.4", features = [] }
+
+[dependencies]
+tauri = { version = "=2.12.5", features = [] }
+tauri-plugin-dialog = "=2.8.3"
+tauri-plugin-opener = "=2.7.2"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+percent-encoding = "2.3.2"
+
+[target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
+tauri-plugin-single-instance = "=2.5.4"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
