@@ -14,6 +14,28 @@ export function searchKey(s) {
 
 const display = (s) => s.normalize('NFKC').replace(/\s+/g, ' ');
 
+// Arabic's definite article starts many words ("ال…"); text stored in visual order shows it reversed at word ends.
+const AL_START = /(^|[^\u0621-\u064a])\u0627\u0644(?=[\u0621-\u064a])/g;
+const AL_END = /(?<=[\u0621-\u064a])\u0644\u0627($|[^\u0621-\u064a])/g;
+const LTR_RUN = /[A-Za-z0-9][A-Za-z0-9 .,:;/()\-_+#%]*[A-Za-z0-9]|[A-Za-z0-9]/g;
+
+/** True when the page's multi-letter right-to-left items are stored in visual (reversed) order. */
+function visualOrder(items) {
+  let logical = 0, visual = 0;
+  for (const it of items) {
+    if (!it.str || !RTL.test(it.str)) continue;
+    const s = it.str.normalize('NFKC');
+    logical += (s.match(AL_START) || []).length;
+    visual += (s.match(AL_END) || []).length;
+  }
+  return visual > logical;
+}
+
+/** Visual-order text to logical order: reverse it, then restore the left-to-right runs. */
+function toLogical(s) {
+  return [...s].reverse().join('').replace(LTR_RUN, (m) => [...m].reverse().join(''));
+}
+
 function geometry(it) {
   const [a, b, c, d, e, f] = it.transform;
   const len = Math.hypot(a, b) || 1;
@@ -32,6 +54,8 @@ function direction(str) {
  * @returns [{ text, key, spans: [{ item, ts, te, ks, ke }] }] (item = index into `items`)
  */
 export function buildLines(items) {
+  // 0. Some writers store whole Arabic lines in visual order; restore logical order first.
+  if (visualOrder(items)) items = items.map((it) => (it.str && RTL.test(it.str) && [...it.str].length > 1 ? { ...it, str: toLogical(it.str) } : it));
   // 1. Group items into lines: same angle and baseline, in content order.
   const groups = [];
   let cur = null, breakNext = false;

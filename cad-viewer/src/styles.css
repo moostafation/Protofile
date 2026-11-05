@@ -110,7 +110,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .panel-tools { display: flex; gap: 6px; padding: 8px; align-items: center; }
 .panel-tools input { flex: 1; min-width: 0; }
 .panel-foot { padding: 8px; border-top: 1px solid var(--line); display: flex; gap: 6px; }
-input[type="search"], input[type="text"], input[type="password"], select, textarea {
+input[type="search"], input[type="text"], input[type="password"], input[type="number"], select, textarea {
   background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; outline: none;
 }
 input:focus, select:focus, textarea:focus { border-color: var(--accent); }

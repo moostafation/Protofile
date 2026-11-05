@@ -9,7 +9,7 @@ import { buildLines, findInLines } from '../src/pdf/text-lines.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const data = new Uint8Array(fs.readFileSync(path.join(here, 'fixtures', 'arabic-text.pdf')));
-const pdf = await pdfjs.getDocument({ data, isEvalSupported: false }).promise;
+const pdf = await pdfjs.getDocument({ data, isEvalSupported: false, verbosity: 0 }).promise;
 const pages = [];
 for (let n = 1; n <= pdf.numPages; n++) pages.push(buildLines((await (await pdf.getPage(n)).getTextContent()).items));
 
@@ -31,4 +31,13 @@ check('Arabic search finds words and maps back to their glyph items', () => {
   assert.equal(findInLines(pages[0], 'v-101').length, 1, 'case-insensitive Latin');
 });
 await pdf.loadingTask.destroy();
+
+// A writer that stores whole Arabic lines in visual (reversed) order.
+const visual = await pdfjs.getDocument({ data: new Uint8Array(fs.readFileSync(path.join(here, 'fixtures', 'arabic-visual.pdf'))), isEvalSupported: false, verbosity: 0 }).promise;
+const vlines = buildLines((await (await visual.getPage(1)).getTextContent()).items);
+check('visual-order Arabic lines are restored to logical order', () => {
+  assert.deepEqual(vlines.map((l) => l.text.trim()), ['Chilled water pump مضخة المياه المثلجة', 'صمام بوابة V-101', 'Valve schedule / جدول المحابس']);
+  assert.equal(findInLines(vlines, 'المياه').length, 1);
+});
+await visual.loadingTask.destroy();
 process.exit(failed ? 1 : 0);
