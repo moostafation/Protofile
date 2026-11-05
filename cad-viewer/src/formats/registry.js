@@ -69,6 +69,9 @@ export const SNIFF_BYTES = 4096;
 /** ASCII DXF: a "0 / SECTION / 2 / <name>" group near the start (comments and whitespace allowed). */
 const DXF_START = /(^|\n)[ \t]*0[ \t]*\r?\n[ \t]*SECTION[ \t]*\r?\n[ \t]*2[ \t]*\r?\n[ \t]*(HEADER|CLASSES|TABLES|BLOCKS|ENTITIES|OBJECTS|THUMBNAILIMAGE)\b/;
 
+/** SVG: an <svg> root after an optional XML declaration, comments and doctype. */
+const SVG_START = /^\s*(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*)*(<!DOCTYPE\s+svg[^>]*>\s*)?<svg[\s>]/i;
+
 /** Recognises formats from their first bytes (up to SNIFF_BYTES), for wrong or missing extensions. */
 export function sniff(bytes) {
   const b = bytes;
@@ -87,6 +90,7 @@ export function sniff(bytes) {
   let head = '';
   for (let i = 0; i < Math.min(b.length, SNIFF_BYTES); i++) head += String.fromCharCode(b[i]);
   if (DXF_START.test(head)) return formatById('dxf');
+  if (SVG_START.test(head)) return formatById('svg');
   return null;
 }
 

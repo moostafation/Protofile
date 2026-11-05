@@ -276,6 +276,7 @@ test('extensions, sniffing and unsupported formats', () => {
   assert.equal(resolveFormat('print.plt', new TextEncoder().encode('%PDF-1.7')).id, 'pdf');
   assert.equal(resolveFormat('drawing', new Uint8Array([0x08, 0x09, 0xfe, 0x02])).id, 'dgn');
   assert.equal(resolveFormat('model.rvt', new TextEncoder().encode('%PDF')).id, 'revit');
+  assert.equal(resolveFormat('drawing.png', new TextEncoder().encode('<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg"></svg>')).id, 'svg');
   const accept = acceptAttribute().split(',');
   for (const e of ['.dwg', '.dwt', '.dgn', '.plt', '.pdf', '.svg', '.tiff', '.rvt']) assert.ok(accept.includes(e), e);
   for (const f of FORMATS) assert.ok(f.open || f.hint, `${f.id} has a loader or a hint`);
