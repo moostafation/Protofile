@@ -38,8 +38,8 @@
     "active": true,
     "targets": "all",
     "category": "Utility",
-    "shortDescription": "Viewer for DWG, DXF, DGN, HP-GL, PDF and image files",
-    "longDescription": "ProtoCAD Viewer opens AutoCAD DWG/DXF, MicroStation DGN V7, HP-GL plot files, PDFs and images, with layers, measuring, vector PDF printing, search, block BOM and an AI assistant.",
+    "shortDescription": "Viewer for DWG, DXF, DGN, HP-GL, IFC, STEP, PCF, 3D, PDF and image files",
+    "longDescription": "ProtoCAD Viewer opens AutoCAD DWG/DXF, MicroStation DGN V7, HP-GL plot files, 3D models (IFC, STEP, IGES, PCF piping files, STL, OBJ, glTF, FBX, COLLADA, PLY, 3MF), PDFs and images, with layers, a model tree, measuring, section boxes, vector PDF printing, search, bills of materials and an AI assistant.",
     "license": "GPL-3.0",
     "publisher": "ProtoCAD",
     "icon": [
@@ -91,6 +91,45 @@
         "name": "ProtoCAD.PLT",
         "description": "HP-GL plot file",
         "mimeType": "application/vnd.hp-hpgl",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "ifc",
+          "ifczip"
+        ],
+        "name": "ProtoCAD.IFC",
+        "description": "IFC building model",
+        "mimeType": "application/x-ifc",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "step",
+          "stp"
+        ],
+        "name": "ProtoCAD.STEP",
+        "description": "STEP 3D model",
+        "mimeType": "model/step",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "iges",
+          "igs"
+        ],
+        "name": "ProtoCAD.IGES",
+        "description": "IGES 3D model",
+        "mimeType": "model/iges",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "pcf"
+        ],
+        "name": "ProtoCAD.PCF",
+        "description": "Piping component file (PCF)",
+        "mimeType": "application/x-pcf",
         "role": "Viewer"
       }
     ],

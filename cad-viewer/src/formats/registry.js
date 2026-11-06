@@ -8,7 +8,9 @@ import { FormatError } from './errors.js';
 
 /**
  * Categories: 'cad' (2D drawings -> Drawing), 'document' (PDF), 'image',
- * '3d' (reserved for 3D models), 'unsupported' (known formats with an export hint).
+ * '3d' (3D models, src/view3d), 'unsupported' (known formats with an export hint).
+ * `associate`: 3D formats the desktop installer makes ProtoCAD Viewer the default app for
+ * (engineering exchange formats); the other 3D formats are only offered under "Open with".
  */
 const cad = (kind) => async (buffer, name) => ({ kind: 'cad', drawing: await loadCad(buffer, name, kind) });
 
@@ -20,6 +22,12 @@ const pdf = async (buffer, name) => {
 const image = (format) => async (buffer, name) => {
   const { openImage } = await import('./image-doc.js');
   return { kind: 'image', sheet: await openImage(buffer, name, format) };
+};
+
+// 3D models: three.js and the parsers are loaded only when such a file is opened.
+const model3d = (kind) => async (buffer, name, ctx) => {
+  const { open3d } = await import('../view3d/open3d.js');
+  return { kind: '3d', model: await open3d(kind, buffer, name, ctx) };
 };
 
 export const FORMATS = [
@@ -35,6 +43,18 @@ export const FORMATS = [
   { id: 'webp', label: 'WebP', exts: ['webp'], category: 'image', open: image('WEBP') },
   { id: 'svg', label: 'SVG', exts: ['svg'], category: 'image', open: image('SVG') },
   { id: 'tiff', label: 'TIFF', exts: ['tif', 'tiff'], category: 'image', open: image('TIFF') },
+  { id: 'ifc', label: 'IFC', exts: ['ifc', 'ifczip'], category: '3d', associate: true, open: model3d('ifc') },
+  { id: 'step', label: 'STEP', exts: ['step', 'stp'], category: '3d', associate: true, open: model3d('step') },
+  { id: 'iges', label: 'IGES', exts: ['iges', 'igs'], category: '3d', associate: true, open: model3d('iges') },
+  { id: 'pcf', label: 'PCF (piping)', exts: ['pcf'], category: '3d', associate: true, open: model3d('pcf') },
+  { id: 'brep', label: 'BREP', exts: ['brep'], category: '3d', open: model3d('brep') },
+  { id: 'stl', label: 'STL', exts: ['stl'], category: '3d', open: model3d('stl') },
+  { id: 'obj', label: 'OBJ', exts: ['obj'], category: '3d', open: model3d('obj') },
+  { id: 'gltf', label: 'glTF / GLB', exts: ['gltf', 'glb'], category: '3d', open: model3d('gltf') },
+  { id: 'fbx', label: 'FBX', exts: ['fbx'], category: '3d', open: model3d('fbx') },
+  { id: 'dae', label: 'COLLADA (DAE)', exts: ['dae'], category: '3d', open: model3d('dae') },
+  { id: 'ply', label: 'PLY', exts: ['ply'], category: '3d', open: model3d('ply') },
+  { id: '3mf', label: '3MF', exts: ['3mf'], category: '3d', open: model3d('3mf') },
   // Known proprietary formats: explained instead of opened. `hint` is an i18n key suffix.
   { id: 'revit', label: 'Revit', exts: ['rvt', 'rfa', 'rte'], category: 'unsupported', hint: 'revit' },
   { id: 'navisworks', label: 'Navisworks', exts: ['nwd', 'nwc', 'nwf'], category: 'unsupported', hint: 'navisworks' },
@@ -45,6 +65,9 @@ export const FORMATS = [
   { id: 'sketchup', label: 'SketchUp', exts: ['skp'], category: 'unsupported', hint: 'sketchup' },
   { id: 'dwf', label: 'DWF', exts: ['dwf', 'dwfx'], category: 'unsupported', hint: 'dwf' },
   { id: 'aveva', label: 'AVEVA / PDMS', exts: ['rvm', 'e3d'], category: 'unsupported', hint: 'aveva' },
+  { id: 'kernel', label: 'Parasolid / ACIS / JT', exts: ['x_t', 'x_b', 'sat', 'sab', 'jt'], category: 'unsupported', hint: 'mcad' },
+  { id: 'rhino', label: 'Rhino', exts: ['3dm'], category: 'unsupported', hint: 'rhino' },
+  { id: 'dcc', label: '3ds Max / Blender / 3DS', exts: ['max', 'blend', '3ds'], category: 'unsupported', hint: 'dcc' },
   { id: 'postscript', label: 'PostScript', exts: ['ps', 'eps'], category: 'unsupported', hint: 'postscript' },
 ];
 
@@ -70,6 +93,9 @@ export const SNIFF_BYTES = 4096;
 /** ASCII DXF: a "0 / SECTION / 2 / <name>" group near the start (comments and whitespace allowed). */
 const DXF_START = /(^|\n)[ \t]*0[ \t]*\r?\n[ \t]*SECTION[ \t]*\r?\n[ \t]*2[ \t]*\r?\n[ \t]*(HEADER|CLASSES|TABLES|BLOCKS|ENTITIES|OBJECTS|THUMBNAILIMAGE)\b/;
 
+/** PCF (piping component file): header or pipeline keywords at the start of a line (same test as pcf.js looksLikePcf). */
+const PCF_START = /(^|\n)\s*(ISOGEN-FILES|UNITS-CO-ORDS|UNITS-BORE|PIPELINE-REFERENCE)\b/;
+
 /** SVG: an <svg> root after an optional XML declaration, comments and doctype. */
 const SVG_START = /^\s*(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*)*(<!DOCTYPE\s+svg[^>]*>\s*)?<svg[\s>]/i;
 
@@ -88,10 +114,25 @@ export function sniff(bytes) {
   if (ascii(0, '(DWF V')) return formatById('dwf');
   if (ascii(0, '%!PS')) return formatById('postscript');
   if (ascii(0, 'AutoCAD Binary DXF')) return formatById('dxf');
+  if (ascii(0, 'glTF')) return formatById('gltf');
+  if (ascii(0, 'Kaydara FBX Binary')) return formatById('fbx');
   let head = '';
   for (let i = 0; i < Math.min(b.length, SNIFF_BYTES); i++) head += String.fromCharCode(b[i]);
   if (DXF_START.test(head)) return formatById('dxf');
   if (SVG_START.test(head)) return formatById('svg');
+  // STEP physical files: IFC by its schema, other schemas (AP203/AP214/AP242) are CAD STEP.
+  if (/^\s*ISO-10303-21\s*;/.test(head)) {
+    const schema = /FILE_SCHEMA\s*\(\s*\(\s*'([^']*)'/i.exec(head)?.[1];
+    if (schema) return formatById(/^IFC/i.test(schema) ? 'ifc' : 'step');
+    return null;
+  }
+  if (/^[^\r\n]{72}S[ 0]{0,6}1\r?\n/.test(head)) return formatById('iges');
+  if (/^\s*(DBRep_DrawableShape|CASCADE Topology V\d)/.test(head)) return formatById('brep');
+  if (/^ply\r?\n/.test(head)) return formatById('ply');
+  if (/^; FBX \d/.test(head)) return formatById('fbx');
+  if (/^\s*(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*)*<COLLADA[\s>]/.test(head)) return formatById('dae');
+  if (/^\s*solid\b[^\n]*\r?\n\s*(facet|endsolid)\b/.test(head)) return formatById('stl');
+  if (PCF_START.test(head)) return formatById('pcf');
   return null;
 }
 
@@ -107,11 +148,14 @@ export function resolveFormat(name, bytes) {
   return byExt;
 }
 
-/** Opens a file buffer. Resolves to { kind: 'cad', drawing } | { kind: 'pdf'|'image', sheet }. */
-export async function openBuffer(format, buffer, name) {
+/**
+ * Opens a file buffer. Resolves to { kind: 'cad', drawing } | { kind: 'pdf'|'image', sheet } | { kind: '3d', model }.
+ * `ctx` (3D models): { signal, onProgress(text), resources: Map<name, Blob>, readSibling(name) }.
+ */
+export async function openBuffer(format, buffer, name, ctx = {}) {
   if (!format) throw new FormatError('Unsupported file type.', 'unknown');
   if (format.category === 'unsupported') throw new FormatError(`${format.label} files cannot be opened in the browser.`, format.hint, format.label);
-  return format.open(buffer, name);
+  return format.open(buffer, name, ctx);
 }
 
 /** The file input's `accept` list: every known extension (unsupported ones get an explanation). */
@@ -122,6 +166,18 @@ export function acceptAttribute() {
 /** Extensions that the app can open (for manifest file_handlers). */
 export function openableExtensions() {
   return FORMATS.filter((f) => f.open).flatMap((f) => f.exts);
+}
+
+/**
+ * Desktop file associations: extensions ProtoCAD Viewer becomes the default app for (CAD drawings
+ * and the engineering 3D formats) and those it is only offered for under "Open with".
+ */
+export function defaultAssociations() {
+  return FORMATS.filter((f) => f.open && (f.category === 'cad' || f.associate)).flatMap((f) => f.exts);
+}
+export function openWithOnly() {
+  const def = new Set(defaultAssociations());
+  return openableExtensions().filter((e) => !def.has(e));
 }
 
 /** Openable extensions grouped by category (for the desktop Open dialog's file type filters). */

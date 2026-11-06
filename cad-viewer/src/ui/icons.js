@@ -51,6 +51,16 @@ const P = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   hand: '<path d="M8 13V5.5a1.5 1.5 0 0 1 3 0V12M11 11V4.5a1.5 1.5 0 0 1 3 0V12M14 11.5V6a1.5 1.5 0 0 1 3 0v8a7 7 0 0 1-7 7h-.5a7 7 0 0 1-5.6-2.8L2.5 15a1.6 1.6 0 0 1 2.4-2.1L8 15.5"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7"/>',
+  cube: '<path d="M12 3 20 7.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5 12 12l8-4.5M12 12v9"/>',
+  viewTop: '<path d="M12 3 20 7.5 12 12 4 7.5z" fill="currentColor" fill-opacity=".35"/><path d="M4 7.5v9L12 21l8-4.5v-9M12 12v9"/>',
+  viewFront: '<path d="M4 7.5 12 12v9l-8-4.5z" fill="currentColor" fill-opacity=".35"/><path d="M12 3 20 7.5v9L12 21M4 7.5 12 3M12 12l8-4.5"/>',
+  viewSide: '<path d="M12 12l8-4.5v9L12 21z" fill="currentColor" fill-opacity=".35"/><path d="M12 3 4 7.5v9L12 21M12 3l8 4.5M4 7.5 12 12"/>',
+  section: '<path d="M12 3 20 7.5v9L12 21l-8-4.5v-9z" opacity=".5"/><path d="M2 13l10-4 10 4-10 4z" fill="currentColor" fill-opacity=".25"/>',
+  wire: '<path d="M12 3 20 7.5v9L12 21l-8-4.5v-9zM4 7.5 12 12l8-4.5M12 12v9M4 7.5l8 13.5M20 7.5 12 21M12 3v9" stroke-width="1.3"/>',
+  xray: '<path d="M12 3 20 7.5v9L12 21l-8-4.5v-9z" stroke-dasharray="2.5 2"/><circle cx="12" cy="12" r="3.2" fill="currentColor" fill-opacity=".5"/>',
+  tree: '<path d="M5 4v14h5M5 9h5M5 14h5"/><rect x="11" y="6.5" width="9" height="5" rx="1"/><rect x="11" y="15.5" width="9" height="5" rx="1"/>',
+  list: '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1.2" fill="currentColor"/><circle cx="4.5" cy="12" r="1.2" fill="currentColor"/><circle cx="4.5" cy="18" r="1.2" fill="currentColor"/>',
+  down: '<path d="M6 9l6 6 6-6"/>',
   more: '<circle cx="5" cy="12" r="1.3" fill="currentColor"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><circle cx="19" cy="12" r="1.3" fill="currentColor"/>',
 };
 

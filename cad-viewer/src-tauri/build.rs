@@ -4,6 +4,7 @@ fn main() {
     let manifest = tauri_build::AppManifest::new().commands(&[
         "pick_file",
         "read_file",
+        "read_sibling",
         "take_pending",
         "save_file",
         "write_file",

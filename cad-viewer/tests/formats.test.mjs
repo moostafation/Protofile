@@ -8,7 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { parseDgn } from '../src/formats/dgn.js';
 import { parseHpgl } from '../src/formats/hpgl.js';
 import { FormatError } from '../src/formats/errors.js';
-import { formatFor, resolveFormat, acceptAttribute, openableExtensions, FORMATS } from '../src/formats/registry.js';
+import { formatFor, resolveFormat, acceptAttribute, openableExtensions, FORMATS, sniff, defaultAssociations, openWithOnly } from '../src/formats/registry.js';
+import { looksLikePcf } from '../src/formats/pcf.js';
 import { buildDrawing } from '../src/cad/drawing.js';
 import { parseDxf } from '../src/cad/dxf-parser.js';
 import { buildScene, STROKE, TEXT, FILL } from '../src/cad/scene.js';
@@ -286,21 +287,68 @@ test('extensions, sniffing and unsupported formats', () => {
   for (const f of FORMATS) assert.ok(f.open || f.hint, `${f.id} has a loader or a hint`);
 });
 
+test('3D formats: extensions, categories and sniffing', () => {
+  const enc = (str) => new TextEncoder().encode(str);
+  for (const [file, id] of [['a.ifc', 'ifc'], ['a.IFCZIP', 'ifc'], ['p.step', 'step'], ['p.STP', 'step'], ['p.igs', 'iges'], ['p.iges', 'iges'], ['p.brep', 'brep'],
+    ['line.pcf', 'pcf'], ['m.stl', 'stl'], ['m.obj', 'obj'], ['m.gltf', 'gltf'], ['m.glb', 'gltf'], ['m.fbx', 'fbx'], ['m.dae', 'dae'], ['m.ply', 'ply'], ['m.3mf', '3mf']]) {
+    assert.equal(formatFor(file)?.id, id, file);
+    assert.equal(formatFor(file).category, '3d', file);
+  }
+  const step = (schema) => enc(`ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('ViewDefinition [CoordinationView]'),'2;1');\nFILE_NAME('x','2024-01-01',(''),(''),'','','');\nFILE_SCHEMA(('${schema}'));\nENDSEC;\nDATA;\n`);
+  assert.equal(sniff(step('IFC2X3')).id, 'ifc');
+  assert.equal(sniff(step('IFC4')).id, 'ifc');
+  assert.equal(sniff(step('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }')).id, 'step');
+  assert.equal(sniff(step('AP242_MANAGED_MODEL_BASED_3D_ENGINEERING_MIM_LF')).id, 'step');
+  // Content wins over the extension: an IFC saved as .stp opens as IFC, an AP214 file named .ifc as STEP.
+  assert.equal(resolveFormat('model.stp', step('IFC4')).id, 'ifc');
+  assert.equal(resolveFormat('model.ifc', step('CONFIG_CONTROL_DESIGN')).id, 'step');
+  // Header cut before FILE_SCHEMA: the extension decides.
+  assert.equal(sniff(enc('ISO-10303-21;\nHEADER;\n')), null);
+  assert.equal(resolveFormat('x.ifc', enc('ISO-10303-21;\nHEADER;\n')).id, 'ifc');
+  const iges = `${'Cube'.padEnd(72)}S      1\n${'1H,,1H;,'.padEnd(72)}G      1\n`;
+  assert.equal(sniff(enc(iges)).id, 'iges');
+  assert.equal(sniff(enc('DBRep_DrawableShape\n\nCASCADE Topology V1, (c) Matra-Datavision\n')).id, 'brep');
+  assert.equal(sniff(enc('glTF\x02\0\0\0')).id, 'gltf');
+  assert.equal(sniff(enc('Kaydara FBX Binary  \0')).id, 'fbx');
+  assert.equal(sniff(enc('; FBX 7.4.0 project file\n')).id, 'fbx');
+  assert.equal(sniff(enc('ply\nformat ascii 1.0\n')).id, 'ply');
+  assert.equal(sniff(enc('<?xml version="1.0"?>\n<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">')).id, 'dae');
+  assert.equal(sniff(enc('solid part\n  facet normal 0 0 1\n')).id, 'stl');
+  assert.equal(sniff(enc('solid part\nendsolid part\n')).id, 'stl');
+  // A binary STL whose 80-byte header starts with "solid" is not taken for ASCII.
+  assert.equal(sniff(enc('solid exported by CAD' + '\0'.repeat(60) + '\x0c\0\0\0')), null);
+  assert.equal(resolveFormat('part.stl', enc('solid exported by CAD' + '\0'.repeat(60))).id, 'stl');
+  const pcf = 'ISOGEN-FILES ISOGEN.FLS\nUNITS-BORE MM\nUNITS-CO-ORDS MM\nPIPELINE-REFERENCE 100-CW-1\n';
+  assert.equal(sniff(enc(pcf)).id, 'pcf');
+  assert.equal(resolveFormat('line.txt', enc(pcf)).id, 'pcf');
+  assert.ok(looksLikePcf(pcf) && !looksLikePcf('ISO-10303-21;\nUNITS-BORE'), 'pcf.js and the registry agree');
+  // Earlier sniffing is unchanged.
+  assert.equal(resolveFormat('plan.dwg', enc('AC1027')).id, 'dwg');
+  assert.equal(resolveFormat('x.pcf', enc('%PDF-1.7')).id, 'pdf');
+  const accept = acceptAttribute().split(',');
+  for (const e of ['.ifc', '.step', '.stp', '.igs', '.pcf', '.stl', '.obj', '.glb', '.fbx', '.dae', '.ply', '.3mf', '.x_t', '.3dm']) assert.ok(accept.includes(e), e);
+  assert.equal(formatFor('part.x_t').category, 'unsupported');
+  assert.equal(formatFor('model.3dm').hint, 'rhino');
+});
+
 test('manifest file_handlers list exactly the openable extensions', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(here, '..', 'public', 'manifest.webmanifest'), 'utf8'));
   const listed = new Set(manifest.file_handlers.flatMap((h) => Object.values(h.accept).flat()).map((e) => e.slice(1)));
   assert.deepEqual([...listed].sort(), [...new Set(openableExtensions())].sort());
 });
 
-test('desktop: CAD formats are associated, PDFs and images only offered under "Open with"', () => {
+test('desktop: CAD and engineering 3D formats are associated, the rest only offered under "Open with"', () => {
   const tauri = path.join(here, '..', 'src-tauri');
   const conf = JSON.parse(fs.readFileSync(path.join(tauri, 'tauri.conf.json'), 'utf8'));
   const assoc = conf.bundle.fileAssociations;
   const exts = assoc.flatMap((a) => a.ext);
-  const cad = FORMATS.filter((f) => f.open && f.category === 'cad').flatMap((f) => f.exts);
-  const others = openableExtensions().filter((e) => !cad.includes(e));
+  const cad = defaultAssociations();
+  const others = openWithOnly();
+  for (const e of ['dwg', 'dxf', 'dgn', 'plt', 'ifc', 'step', 'stp', 'iges', 'igs', 'pcf']) assert.ok(cad.includes(e), `${e} is a default association`);
+  for (const e of ['pdf', 'png', 'stl', 'obj', 'fbx', 'glb', 'gltf', 'ply', 'dae', '3mf', 'brep']) assert.ok(others.includes(e), `${e} is only offered under Open with`);
+  assert.deepEqual([...cad, ...others].sort(), [...openableExtensions()].sort());
   assert.equal(new Set(exts).size, exts.length, 'no extension is associated twice');
-  // NSIS (APP_ASSOCIATE) and MSI make associated types default to the program: CAD types only.
+  // NSIS (APP_ASSOCIATE) and MSI make associated types default to the program: CAD and engineering 3D types only.
   assert.deepEqual([...exts].sort(), [...cad].sort());
   // Windows uses `name` as the registry class (ProgID) and `description` in Explorer; Linux needs a MIME type.
   for (const a of assoc) {
@@ -319,12 +367,18 @@ test('desktop: CAD formats are associated, PDFs and images only offered under "O
   assert.ok(!/Key="Software\\Classes\\\.\w+" /.test(wxs), 'the MSI fragment never sets a default');
   assert.deepEqual(conf.bundle.windows.wix.componentRefs, ['OpenWithEntries']);
   assert.ok(wxs.includes('Component Id="OpenWithEntries"'));
-  // Linux: the desktop file offers the PDF/image MIME types too; the deb teaches the desktop the CAD extensions.
+  // Linux: the desktop file offers the PDF/image/3D mesh MIME types too; the deb teaches the desktop
+  // the associated extensions and the 3D types shared-mime-info does not know.
   const desktop = fs.readFileSync(path.join(tauri, conf.bundle.linux.deb.desktopTemplate), 'utf8');
-  for (const m of ['application/pdf', 'image/png', 'image/jpeg', 'image/tiff', 'image/svg+xml']) assert.ok(desktop.includes(m), m);
+  for (const m of ['application/pdf', 'image/png', 'image/jpeg', 'image/tiff', 'image/svg+xml', 'model/stl', 'model/obj', 'model/gltf+json', 'model/gltf-binary', 'model/x-fbx', 'model/vnd.collada+xml', 'model/x-ply', 'model/3mf', 'model/x-brep']) assert.ok(desktop.includes(m + ';'), m);
   const mime = fs.readFileSync(path.join(tauri, Object.values(conf.bundle.linux.deb.files)[0]), 'utf8');
   const globs = [...mime.matchAll(/<glob pattern="\*\.(\w+)"/g)].map((m) => m[1]);
-  assert.deepEqual(globs.sort(), [...cad].sort(), 'MIME globs for every CAD extension');
+  for (const e of cad) assert.ok(globs.includes(e), `MIME glob for associated .${e}`);
+  for (const e of globs) assert.ok(openableExtensions().includes(e), `.${e} opens`);
+  for (const e of ['fbx', 'dae', 'ply', 'brep']) assert.ok(globs.includes(e), `MIME type for .${e} (unknown to shared-mime-info)`);
+  assert.match(mime, /<glob pattern="\*\.pcf" weight="60"\/>/, 'PCF piping files outrank PCF fonts');
+  // Every association's MIME type is defined for the desktop (ours or shared-mime-info's model/iges).
+  for (const a of assoc) assert.ok(mime.includes(`type="${a.mimeType}"`), a.mimeType);
 });
 
 console.log('Robustness and display');

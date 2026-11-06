@@ -269,7 +269,8 @@ function titleStrip(doc, plan, o, info) {
  * @returns {jsPDF}
  */
 export function exportImagePdf(sheet, o) {
-  const photo = sheet.format === 'JPEG' || sheet.format === 'WEBP';
+  // Photos (and rendered 3D views) embed as JPEG, drawings and scans as PNG.
+  const photo = sheet.photo ?? (sheet.format === 'JPEG' || sheet.format === 'WEBP');
   let doc = null;
   const pages = o.pages === 'all' ? Array.from({ length: sheet.pageCount }, (_, i) => i + 1) : [sheet.pageNo];
   for (const n of pages) {
@@ -297,7 +298,7 @@ export function exportImagePdf(sheet, o) {
       canvas = sheet.renderArea(a, Math.max(1, pw * k), Math.max(1, ph * k));
     }
     doc.addImage(canvas, photo ? 'JPEG' : 'PNG', plan.ox, plan.oy, wmm, hmm, undefined, 'FAST');
-    if (o.stamp) titleStrip(doc, plan, { ...o, title: pages.length > 1 ? `${o.title}  (${n}/${sheet.pageCount})` : o.title }, `${sheet.format} ${Math.round(a[2] - a[0])}×${Math.round(a[3] - a[1])} px   ${o.paper}`);
+    if (o.stamp) titleStrip(doc, plan, { ...o, title: pages.length > 1 ? `${o.title}  (${n}/${sheet.pageCount})` : o.title }, `${sheet.printInfo ?? `${sheet.format} ${Math.round(a[2] - a[0])}×${Math.round(a[3] - a[1])} px`}   ${o.paper}`);
   }
   return doc;
 }

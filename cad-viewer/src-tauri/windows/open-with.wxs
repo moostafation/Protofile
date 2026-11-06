@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- ProtoCAD Viewer MSI: "Open with" entries for PDFs and images (tauri.conf.json > bundle > windows >
+<!-- ProtoCAD Viewer MSI: "Open with" entries for PDFs, images and 3D mesh formats (tauri.conf.json > bundle > windows >
      wix > fragmentPaths / componentRefs). Like the NSIS hook (open-with.nsh), only OpenWithProgids and
      touched. The MSI is per machine, so the entries go to HKLM\Software\Classes and Windows Installer
      removes them on uninstall. [#Path] is the main program file (Tauri's main.wxs). -->
@@ -32,6 +32,30 @@
         <RegistryValue Root="HKLM" Key="Software\Classes\ProtoCAD.TIFF" Type="string" Value="TIFF image" />
         <RegistryValue Root="HKLM" Key="Software\Classes\ProtoCAD.TIFF\DefaultIcon" Type="string" Value="&quot;[#Path]&quot;,0" />
         <RegistryValue Root="HKLM" Key="Software\Classes\ProtoCAD.TIFF\shell\open\command" Type="string" Value="&quot;[#Path]&quot; &quot;%1&quot;" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\ProtoCAD.BREP" Type="string" Value="BREP 3D model" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\ProtoCAD.BREP\DefaultIcon" Type="string" Value="&quot;[#Path]&quot;,0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\ProtoCAD.BREP\shell\open\command" Type="string" Value="&quot;[#Path]&quot; &quot;%1&quot;" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\ProtoCAD.STL" Type="string" Value="STL 3D model" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\ProtoCAD.STL\DefaultIcon" Type="string" Value="&quot;[#Path]&quot;,0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\ProtoCAD.STL\shell\open\command" Type="string" Value="&quot;[#Path]&quot; &quot;%1&quot;" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\ProtoCAD.OBJ" Type="string" Value="OBJ 3D model" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\ProtoCAD.OBJ\DefaultIcon" Type="string" Value="&quot;[#Path]&quot;,0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\ProtoCAD.OBJ\shell\open\command" Type="string" Value="&quot;[#Path]&quot; &quot;%1&quot;" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\ProtoCAD.GLTF" Type="string" Value="glTF 3D model" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\ProtoCAD.GLTF\DefaultIcon" Type="string" Value="&quot;[#Path]&quot;,0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\ProtoCAD.GLTF\shell\open\command" Type="string" Value="&quot;[#Path]&quot; &quot;%1&quot;" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\ProtoCAD.FBX" Type="string" Value="FBX 3D model" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\ProtoCAD.FBX\DefaultIcon" Type="string" Value="&quot;[#Path]&quot;,0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\ProtoCAD.FBX\shell\open\command" Type="string" Value="&quot;[#Path]&quot; &quot;%1&quot;" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\ProtoCAD.DAE" Type="string" Value="COLLADA 3D model" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\ProtoCAD.DAE\DefaultIcon" Type="string" Value="&quot;[#Path]&quot;,0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\ProtoCAD.DAE\shell\open\command" Type="string" Value="&quot;[#Path]&quot; &quot;%1&quot;" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\ProtoCAD.PLY" Type="string" Value="PLY 3D model" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\ProtoCAD.PLY\DefaultIcon" Type="string" Value="&quot;[#Path]&quot;,0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\ProtoCAD.PLY\shell\open\command" Type="string" Value="&quot;[#Path]&quot; &quot;%1&quot;" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\ProtoCAD.3MF" Type="string" Value="3MF 3D model" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\ProtoCAD.3MF\DefaultIcon" Type="string" Value="&quot;[#Path]&quot;,0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\ProtoCAD.3MF\shell\open\command" Type="string" Value="&quot;[#Path]&quot; &quot;%1&quot;" />
         <RegistryValue Root="HKLM" Key="Software\Classes\.pdf\OpenWithProgids" Name="ProtoCAD.PDF" Type="string" Value="ProtoCAD Viewer" />
         <RegistryValue Root="HKLM" Key="Software\Classes\.png\OpenWithProgids" Name="ProtoCAD.PNG" Type="string" Value="ProtoCAD Viewer" />
         <RegistryValue Root="HKLM" Key="Software\Classes\.jpg\OpenWithProgids" Name="ProtoCAD.JPEG" Type="string" Value="ProtoCAD Viewer" />
@@ -42,6 +66,15 @@
         <RegistryValue Root="HKLM" Key="Software\Classes\.svg\OpenWithProgids" Name="ProtoCAD.SVG" Type="string" Value="ProtoCAD Viewer" />
         <RegistryValue Root="HKLM" Key="Software\Classes\.tif\OpenWithProgids" Name="ProtoCAD.TIFF" Type="string" Value="ProtoCAD Viewer" />
         <RegistryValue Root="HKLM" Key="Software\Classes\.tiff\OpenWithProgids" Name="ProtoCAD.TIFF" Type="string" Value="ProtoCAD Viewer" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.brep\OpenWithProgids" Name="ProtoCAD.BREP" Type="string" Value="ProtoCAD Viewer" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.stl\OpenWithProgids" Name="ProtoCAD.STL" Type="string" Value="ProtoCAD Viewer" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.obj\OpenWithProgids" Name="ProtoCAD.OBJ" Type="string" Value="ProtoCAD Viewer" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.gltf\OpenWithProgids" Name="ProtoCAD.GLTF" Type="string" Value="ProtoCAD Viewer" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.glb\OpenWithProgids" Name="ProtoCAD.GLTF" Type="string" Value="ProtoCAD Viewer" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.fbx\OpenWithProgids" Name="ProtoCAD.FBX" Type="string" Value="ProtoCAD Viewer" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.dae\OpenWithProgids" Name="ProtoCAD.DAE" Type="string" Value="ProtoCAD Viewer" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.ply\OpenWithProgids" Name="ProtoCAD.PLY" Type="string" Value="ProtoCAD Viewer" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.3mf\OpenWithProgids" Name="ProtoCAD.3MF" Type="string" Value="ProtoCAD Viewer" />
       </Component>
     </DirectoryRef>
   </Fragment>

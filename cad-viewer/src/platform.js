@@ -35,6 +35,19 @@ export function readPath(path) {
   return { name: baseName(path), path, arrayBuffer: () => invoke('read_file', { path }) };
 }
 
+/**
+ * Desktop: a file next to an opened file (an OBJ's MTL and textures, a glTF's .bin), or null.
+ * Only plain names in the same folder and resource types are allowed (see files.rs read_sibling).
+ */
+export async function readSibling(path, name) {
+  if (!isDesktop) return null;
+  try {
+    return await invoke('read_sibling', { path, name });
+  } catch {
+    return null;
+  }
+}
+
 let dialogOpen = false;
 /** Runs a native file dialog unless one is already open (e.g. Ctrl+O reaching both menu and page). */
 async function oneDialog(show) {

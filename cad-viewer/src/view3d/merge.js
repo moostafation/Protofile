@@ -45,8 +45,9 @@ export function computeNormals(pos, idx) {
 }
 
 class Chunk {
-  constructor(key, attrs) {
+  constructor(key, matKey, attrs) {
     this.key = key;
+    this.matKey = matKey;
     this.attrs = attrs; // { colors, uvs }
     this.pos = new Grow(Float32Array, 4096);
     this.nrm = new Grow(Float32Array, 4096);
@@ -89,10 +90,10 @@ export class MergeBuilder {
     if (x > b[o + 3]) b[o + 3] = x; if (y > b[o + 4]) b[o + 4] = y; if (z > b[o + 5]) b[o + 5] = z;
   }
 
-  chunkFor(key, attrs, verts) {
+  chunkFor(key, matKey, attrs, verts) {
     let c = this.chunks.get(key);
     if (!c || c.verts + verts > MAX_CHUNK_VERTS) {
-      c = new Chunk(key, attrs);
+      c = new Chunk(key, matKey, attrs);
       this.chunks.set(key, c);
       this.allChunks.push(c);
     }
@@ -118,7 +119,7 @@ export class MergeBuilder {
     this.ensureElement(id);
     const attrs = { colors: !!extra.colors, uvs: !!extra.uvs };
     const key = `${matKey}${attrs.colors ? '|c' : ''}${attrs.uvs ? '|t' : ''}`;
-    const c = this.chunkFor(key, attrs, nv);
+    const c = this.chunkFor(key, matKey, attrs, nv);
     const base = c.verts;
     const m = extra.matrix;
     const [sx, sy, sz] = this.shift;
@@ -242,7 +243,7 @@ function finishChunk(c) {
     }
   }
   return {
-    key: c.key,
+    key: c.key, matKey: c.matKey ?? c.key,
     positions, normals: c.nrm.done(), colors: c.col ? c.col.done() : null, uvs: c.uv ? c.uv.done() : null, index, ranges,
     cells: Float32Array.from(cells), cellRefs: Int32Array.from(refs),
   };

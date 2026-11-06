@@ -9,34 +9,35 @@ import Anthropic from '@anthropic-ai/sdk';
 export const DEFAULT_MODEL = 'claude-opus-5-5';
 const MAX_TOOL_ROUNDS = 8;
 
-const SYSTEM = `You are the assistant built into ProtoCAD Viewer, a viewer for CAD drawings (AutoCAD DWG/DXF, MicroStation DGN, HP-GL plot files), PDF documents and images (scans, photos, SVG) used by piping, MEP and plant design engineers.
+const SYSTEM = `You are the assistant built into ProtoCAD Viewer, a viewer for CAD drawings (AutoCAD DWG/DXF, MicroStation DGN, HP-GL plot files), 3D models (IFC BIM models, STEP/IGES CAD assemblies, PCF piping isometric files, STL, OBJ, glTF, FBX, COLLADA, PLY, 3MF), PDF documents and images (scans, photos, SVG) used by piping, MEP and plant design engineers.
 
-The current document's extracted data is given inside <document> in the first user message: layers (DGN levels, plotter pens) with entity counts and linework lengths, block references (DGN cells) with counts and attribute values, and all texts. For PDFs it is the extracted text per page. Images have no extracted text: the image itself is attached to the first message, so read it visually. The user may also attach an image of the current view.
+The current document's extracted data is given inside <document> in the first user message. For 2D drawings: layers (DGN levels, plotter pens) with entity counts and linework lengths, block references (DGN cells) with counts and attribute values, and all texts. For 3D models: format, units, bounding box, element counts by type (IFC types, PCF component types), storeys or pipelines, materials, the PCF bill of materials with pipe length per size, and element names with their [#id]. For PDFs it is the extracted text per page. Images have no extracted text: the image itself is attached to the first message, so read it visually. The user may also attach an image of the current view.
 
 How to work:
 - Reply in the language the user writes in (Arabic or English). Keep engineering terms (layer names, tags, sizes) exactly as they appear in the drawing.
 - Base counts, tags and quantities on the provided data and say when something is not in the data rather than guessing. Linework lengths are sums of all lines/polylines/arcs on a layer in drawing units, which approximate pipe/duct lengths only when that layer holds the routing.
 - Use tables for quantities, schedules and bills of materials.
-- Use the tools to search the drawing, zoom to and highlight what you are talking about, or show/hide layers when that helps the user see the answer.
-- Refer to drawing items as [#id] (the id numbers from the data or tool results) so the user can click them.`;
+- Use the tools to search the drawing or model, zoom to and highlight what you are talking about, or show/hide layers (2D) or groups of elements (3D: by IFC type, storey, PCF pipeline or component category) when that helps the user see the answer.
+- For 3D models, item_details gives an element's full properties (IFC property sets and quantities, PCF attributes and points).
+- Refer to drawing items and 3D elements as [#id] (the id numbers from the data or tool results) so the user can click them.`;
 
 const TOOLS = [
   {
     name: 'find_in_drawing',
-    description: 'Search the open document for text, tags, block names, attribute values or layer names. Returns matching item ids with their text and layer (for PDFs: page numbers). Use this before zooming to something.',
+    description: 'Search the open document. 2D drawings: text, tags, block names, attribute values or layer names (returns item ids with text and layer). 3D models: element names, types, tags, item codes, GlobalIds, materials and property values (returns element ids with name, type and storey/pipeline). PDFs: page numbers. Matches are highlighted. Use this before zooming to something.',
     input_schema: {
       type: 'object',
-      properties: { query: { type: 'string', description: 'Words to search for, e.g. "V-101" or "PUMP".' } },
+      properties: { query: { type: 'string', description: 'Words to search for, e.g. "V-101", "PUMP", "IfcPipeSegment" or "GATE VALVE".' } },
       required: ['query'],
     },
   },
   {
     name: 'zoom_to',
-    description: 'Zoom the viewer to items and highlight them for the user. For CAD give item_ids; for PDFs give a page number and optionally a text to highlight on it.',
+    description: 'Zoom the viewer to items and highlight them for the user. For CAD drawings and 3D models give item_ids (element ids in 3D); for PDFs give a page number and optionally a text to highlight on it.',
     input_schema: {
       type: 'object',
       properties: {
-        item_ids: { type: 'array', items: { type: 'integer' }, description: 'Item ids from the data or from find_in_drawing.' },
+        item_ids: { type: 'array', items: { type: 'integer' }, description: 'Item or element ids from the data or from find_in_drawing.' },
         page: { type: 'integer', description: 'PDF page number (PDF documents only).' },
         text: { type: 'string', description: 'Text to highlight on the PDF page.' },
       },
@@ -44,7 +45,7 @@ const TOOLS = [
   },
   {
     name: 'set_layers',
-    description: 'Change which CAD layers are visible. Use "only" to isolate layers, or "show"/"hide" lists, or reset=true to restore all layers.',
+    description: 'Change what is visible. 2D drawings: layer names. 3D models: group names, i.e. IFC types (e.g. "IfcWall"), storey names, IFC type names, PCF pipeline references or component categories ("Valves", "Supports"), or STEP assembly paths. Use "only" to isolate, "show"/"hide" lists, or reset=true to restore the default visibility.',
     input_schema: {
       type: 'object',
       properties: {
@@ -57,7 +58,7 @@ const TOOLS = [
   },
   {
     name: 'item_details',
-    description: 'Details of CAD items: type, layer, block name, attributes, text, length, and world coordinates of the bounding box.',
+    description: 'Details of items. 2D: type, layer, block name, attributes, text, length and bounding box. 3D: name, type, all properties (IFC attributes, property sets and quantities; PCF attributes, points, item code, size) and bounding box in file coordinates.',
     input_schema: {
       type: 'object',
       properties: { item_ids: { type: 'array', items: { type: 'integer' } } },

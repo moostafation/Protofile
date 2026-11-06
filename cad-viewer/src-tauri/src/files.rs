@@ -283,6 +283,48 @@ pub async fn read_file(app: AppHandle, path: String) -> Result<Response, String>
     }
 }
 
+/// File types a 3D model may load from its own folder: an OBJ's MTL and textures, a glTF's
+/// buffers and images.
+const SIBLING_TYPES: &[&str] = &["mtl", "bin", "png", "jpg", "jpeg", "gif", "bmp", "webp", "tga", "tif", "tiff"];
+
+/// The file `name` next to `base`, when `name` is a plain file name of a resource type: no folder
+/// parts, no `..`, no drive or stream (`:`). Matches the name case-insensitively when the exact
+/// spelling is not there (models made on Windows refer to "Texture.JPG" for "texture.jpg").
+fn sibling_path(base: &Path, name: &str) -> Result<PathBuf, String> {
+    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', ':', '\0']) {
+        return Err(format!("{name} is not a file name."));
+    }
+    let ext = Path::new(name).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+    if !SIBLING_TYPES.contains(&ext.as_str()) {
+        return Err(format!("{name} is not a material, buffer or texture file."));
+    }
+    let dir = base.parent().ok_or_else(|| format!("{} has no folder.", base.display()))?;
+    let exact = dir.join(name);
+    if exact.is_file() {
+        return Ok(exact);
+    }
+    let lower = name.to_lowercase();
+    std::fs::read_dir(dir)
+        .ok()
+        .and_then(|entries| {
+            entries.filter_map(Result::ok).map(|e| e.path()).find(|p| p.is_file() && p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.to_lowercase() == lower))
+        })
+        .ok_or_else(|| format!("{name} was not found next to {}.", file_name(base)))
+}
+
+/// Reads a file next to a file the user opened (see `sibling_path`), so a 3D model made of
+/// several files (OBJ + MTL + textures, glTF + .bin) opens from Explorer with its materials.
+#[tauri::command]
+pub async fn read_sibling(app: AppHandle, path: String, name: String) -> Result<Response, String> {
+    let base = PathBuf::from(path);
+    if !app.state::<Session>().is_allowed(&base) && !recent::contains(&app, &base) {
+        return Err(format!("{} was not opened by you.", file_name(&base)));
+    }
+    let file = sibling_path(&base, &name)?;
+    let bytes = tauri::async_runtime::spawn_blocking(move || std::fs::read(file)).await.map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
+    Ok(Response::new(bytes))
+}
+
 /// Files waiting to be opened (see `queue_open`), and messages about files that cannot be.
 #[derive(Serialize)]
 pub struct Pending {
@@ -501,6 +543,25 @@ mod tests {
         write_replacing(&path, b"new").unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"new");
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn siblings_are_plain_resource_names_in_the_same_folder() {
+        let dir = std::env::temp_dir().join(format!("protocad-sibling-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let model = dir.join("pump.obj");
+        std::fs::write(&model, b"o pump").unwrap();
+        std::fs::write(dir.join("pump.mtl"), b"newmtl a").unwrap();
+        std::fs::write(dir.join("Steel.JPG"), b"jpg").unwrap();
+        std::fs::write(dir.join("notes.txt"), b"x").unwrap();
+        assert_eq!(sibling_path(&model, "pump.mtl").unwrap(), dir.join("pump.mtl"));
+        assert_eq!(sibling_path(&model, "steel.jpg").unwrap(), dir.join("Steel.JPG"));
+        assert!(sibling_path(&model, "notes.txt").is_err(), "only resource types");
+        assert!(sibling_path(&model, "../pump.mtl").is_err(), "no folders");
+        assert!(sibling_path(&model, "sub\\pump.mtl").is_err());
+        assert!(sibling_path(&model, "C:pump.mtl").is_err());
+        assert!(sibling_path(&model, "missing.png").is_err());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

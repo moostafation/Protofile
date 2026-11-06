@@ -95,6 +95,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             files::pick_file,
             files::read_file,
+            files::read_sibling,
             files::take_pending,
             files::save_file,
             files::write_file,

@@ -223,6 +223,12 @@ export function componentLength(c) {
   return Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
 }
 
+/** The BOM line a component counts in: its item code (and size), else type + SKEY + size. */
+export function bomKey(c, units) {
+  const size = componentSize(c, units);
+  return c.itemCode ? `code:${c.itemCode}|${size}` : `${c.type}|${c.skey}|${size}`;
+}
+
 /** Length unit for the BOM: metres for metric files, feet for imperial ones. */
 function lengthUnit(units) {
   return units.coordMm === 25.4 || units.coordMm === 304.8 ? { label: 'ft', perUnit: units.coordMm / 304.8 } : { label: 'm', perUnit: units.coordMm / 1000 };
@@ -242,11 +248,11 @@ export function pcfBom(pcf, opts = {}) {
     if (!c.physical) continue;
     if (opts.pipeline && c.pipeline !== opts.pipeline) continue;
     const size = componentSize(c, pcf.units);
-    const key = c.itemCode ? `code:${c.itemCode}|${size}` : `${c.type}|${c.skey}|${size}`;
+    const key = bomKey(c, pcf.units);
     let r = rows.get(key);
     if (!r) {
       const desc = c.description || [c.type.replace(/-/g, ' ').toLowerCase().replace(/^./, (s) => s.toUpperCase()), c.skey].filter(Boolean).join(' ');
-      rows.set(key, r = { category: c.category, itemCode: c.itemCode, description: desc, size, qty: 0, unit: c.category === 'Pipe' ? lu.label : 'pcs', pipelines: new Set(), bore: c.bore ?? 0 });
+      rows.set(key, r = { key, category: c.category, itemCode: c.itemCode, description: desc, size, qty: 0, unit: c.category === 'Pipe' ? lu.label : 'pcs', pipelines: new Set(), bore: c.bore ?? 0 });
     }
     r.pipelines.add(c.pipeline);
     if (c.category === 'Pipe') {

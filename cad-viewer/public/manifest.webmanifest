@@ -1,7 +1,7 @@
 {
   "name": "ProtoCAD Viewer",
   "short_name": "ProtoCAD",
-  "description": "Viewer for AutoCAD DWG/DXF, MicroStation DGN, HP-GL plot files, PDFs and images, with measuring, PDF printing and an AI assistant.",
+  "description": "Viewer for AutoCAD DWG/DXF, MicroStation DGN, HP-GL plot files, 3D models (IFC, STEP, IGES, PCF piping, STL, OBJ, glTF, FBX, DAE, PLY, 3MF), PDFs and images, with measuring, PDF printing and an AI assistant.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
@@ -29,7 +29,20 @@
         "image/bmp": [".bmp"],
         "image/webp": [".webp"],
         "image/svg+xml": [".svg"],
-        "image/tiff": [".tif", ".tiff"]
+        "image/tiff": [".tif", ".tiff"],
+        "application/x-ifc": [".ifc", ".ifczip"],
+        "model/step": [".step", ".stp"],
+        "model/iges": [".iges", ".igs"],
+        "application/x-pcf": [".pcf"],
+        "model/x-brep": [".brep"],
+        "model/stl": [".stl"],
+        "model/obj": [".obj"],
+        "model/gltf+json": [".gltf"],
+        "model/gltf-binary": [".glb"],
+        "model/x-fbx": [".fbx"],
+        "model/vnd.collada+xml": [".dae"],
+        "model/x-ply": [".ply"],
+        "model/3mf": [".3mf"]
       }
     }
   ]

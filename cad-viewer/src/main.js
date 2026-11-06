@@ -247,13 +247,16 @@ function applyI18n() {
   buildQuickPrompts();
 }
 
-/** data-needs lists the document kinds an element is shown for: doc, cad, pdf, image or sheet (pdf + image). */
+/**
+ * data-needs lists the document kinds an element is shown for: doc, cad, pdf, image, 3d, sheet
+ * (pdf + image) or bom (a 3D model with a bill of materials or element list).
+ */
 function updateNeeds() {
   const kind = state.doc?.kind;
-  for (const el of $$('[data-needs]')) {
-    el.hidden = !el.dataset.needs.split(/\s+/).some((need) => (need === 'doc' ? !!kind : need === 'sheet' ? kind === 'pdf' || kind === 'image' : need === kind));
-  }
+  const has = (need) => (need === 'doc' ? !!kind : need === 'sheet' ? kind === 'pdf' || kind === 'image' : need === 'bom' ? !!state.doc?.model?.bom : need === kind);
+  for (const el of $$('[data-needs]')) el.hidden = !el.dataset.needs.split(/\s+/).some(has);
   $('#welcome').hidden = !!kind;
+  if (kind !== '3d') $('#sectionPanel').hidden = true;
 }
 
 function toast(msg, isError = false, ms = 3500) {
@@ -282,7 +285,8 @@ let openSeq = 0; // the load whose result may be shown
 let chosenSeq = 0; // order in which files were chosen
 let latestLoadable = 0; // the latest chosen file that turned out to be openable
 let loading = false; // a load of an openable file is running
-async function openFile(file) {
+let loadAbort = null; // cancels the running load (3D readers in workers) when another file is opened
+async function openFile(file, resources = null) {
   // The last file chosen wins: results of earlier, slower loads are dropped. A file that cannot
   // be opened (unsupported, unreadable) does not cancel the one that is loading.
   const chosen = ++chosenSeq;
@@ -306,9 +310,24 @@ async function openFile(file) {
     latestLoadable = chosen;
     my = ++openSeq;
     loading = true;
-    const result = await openBuffer(format, buffer, name);
-    if (!current()) { result.sheet?.dispose?.(); return false; }
-    if (result.kind === 'cad') {
+    loadAbort?.abort();
+    const abort = loadAbort = new AbortController();
+    const fileSize = buffer.byteLength;
+    if (format.category === '3d') showLoading(t('loading3d'));
+    const result = await openBuffer(format, buffer, name, {
+      signal: abort.signal,
+      onProgress: (text) => { if (current()) showLoading(text); },
+      resources,
+      // Desktop: an OBJ's MTL, a glTF's .bin and textures next to the model.
+      readSibling: platform.isDesktop && file.path ? (n) => platform.readSibling(file.path, n) : null,
+    });
+    if (!current()) { result.sheet?.dispose?.(); result.model?.dispose?.(); return false; }
+    if (result.kind === '3d') {
+      showLoading(t('building'));
+      await nextFrame();
+      if (!current()) { result.model.dispose?.(); return false; }
+      await set3dDoc(result.model, fileSize);
+    } else if (result.kind === 'cad') {
       showLoading(t('building'));
       await nextFrame();
       if (!current()) return false;
@@ -337,15 +356,22 @@ async function openFile(file) {
 }
 
 /** Opens a file from disk (desktop) and adds it to the recent files once it is shown. */
-async function openDiskFile(file) {
-  if (await openFile(file)) platform.addRecent(file.path);
+async function openDiskFile(file, resources = null) {
+  if (await openFile(file, resources)) platform.addRecent(file.path);
 }
 
-/** Files handed over by the system (drag & drop, double-click, Open with): the first one opens. */
+/**
+ * Files handed over by the system (drag & drop, double-click, Open with, several files chosen):
+ * one opens. A 3D model opened with other files (OBJ + MTL + textures, glTF + .bin) gets them
+ * as its resources.
+ */
 function openHandedFiles(files, errors = []) {
-  if (files.length) (platform.isDesktop ? openDiskFile : openFile)(files[0]);
+  const main = files.find((f) => formatFor(f.name)?.category === '3d' && !/\.(mtl|bin)$/i.test(f.name)) ?? files[0];
+  const is3d = formatFor(main?.name)?.category === '3d';
+  const resources = is3d && files.length > 1 ? new Map(files.filter((f) => f !== main).map((f) => [f.name, f])) : null;
+  if (main) (platform.isDesktop ? openDiskFile : openFile)(main, resources);
   const notes = [...errors];
-  if (files.length > 1) notes.push(t('oneFileAtATime'));
+  if (files.length > 1 && !resources) notes.push(t('oneFileAtATime'));
   if (notes.length) toast(notes.join(' '), errors.length > 0, errors.length ? 10000 : 5000);
 }
 
@@ -392,6 +418,10 @@ function resetDocState() {
   // dialog that belongs to the previous one.
   for (const id of ['#printDialog', '#calibrateDialog']) if ($(id).open) $(id).close();
   activeSheet()?.dispose?.();
+  if (state.doc?.kind === '3d') state.doc.view?.dispose();
+  // Panels refreshed below must not show the old document (the caller sets the new one).
+  state.doc = null;
+  closeMenus();
   aiImage = { key: null, url: null }; // the assistant's copy of the previous picture
   state.selection = [];
   state.highlights = [];
@@ -472,6 +502,56 @@ function setSheetDoc(kind, sheet) {
   if (!$('#rightbar').hidden && $('#rightTabs .active')?.dataset.rtab === 'ai') showAiIntro();
 }
 
+let doc3dModule = null;
+/** Shows a 3D model (IFC, STEP, PCF, mesh formats) in the 3D viewport. */
+async function set3dDoc(model, fileSize = 0) {
+  const { Doc3D, sharedViewer } = await (doc3dModule ??= import('./view3d/doc3d.js'));
+  try {
+    sharedViewer();
+  } catch (err) {
+    // No WebGL (old graphics driver, hardware acceleration turned off): keep the open document.
+    model.dispose?.();
+    throw new Error(t('noWebgl'), { cause: err });
+  }
+  resetDocState();
+  viewer.setDocument(null); // the 2D viewer lets go of the previous drawing
+  state.doc = { kind: '3d', model, fileSize };
+  updateNeeds();
+  let view;
+  try {
+    view = new Doc3D(model, {
+      t, toast, icon, escapeHtml, theme: THEMES[state.theme],
+      onSelection: () => { showProperties(); updateStatus(); },
+      onStatus: (p) => updateStatus(p),
+    });
+  } catch (err) {
+    model.dispose?.();
+    state.doc = null;
+    updateNeeds();
+    throw err;
+  }
+  state.doc.view = view;
+  view.setSnap(state.snap);
+  $('#projLabel').textContent = view.ortho ? 'ORTHO' : 'PERSP';
+  $('#wireBtn').classList.remove('active');
+  $('#xrayBtn').classList.remove('active');
+  buildLayerPanel();
+  buildBlockPanel();
+  buildSpaceTabs();
+  buildInfoPanel();
+  setSideTab(window.innerWidth > 860 ? 'model' : null);
+  setTool('select');
+  updateEditUi();
+  updateStatus();
+  showProperties();
+  if (!$('#rightbar').hidden && $('#rightTabs .active')?.dataset.rtab === 'ai') showAiIntro();
+}
+
+/** The open 3D document's controller (Doc3D), or null. */
+const view3d = () => (state.doc?.kind === '3d' ? state.doc.view ?? null : null);
+function zoomExtentsActive() { if (view3d()) view3d().zoomExtents(); else viewer.zoomExtents(); }
+function zoomActive(f) { if (view3d()) view3d().zoomAt(1 / f); else viewer.zoomAt(f); }
+
 async function gotoPage(n) {
   const sheet = activeSheet();
   if (!sheet || n < 1 || n > sheet.pageCount || n === sheet.pageNo) return;
@@ -516,6 +596,7 @@ function drawOverlay(o, v) {
 function updateStatus(w) {
   const el = $('#status');
   if (!state.doc) { el.textContent = ''; return; }
+  if (state.doc.kind === '3d') { el.textContent = state.doc.view?.statusText(w) ?? ''; return; }
   const parts = [];
   if (w) {
     if (state.doc.kind === 'cad') {
@@ -561,7 +642,10 @@ let lastCommand = null;
 function setTool(name) {
   if (EDIT_TOOLS[name] && !activeSpace()) name = 'select';
   currentTool = name;
-  if (name === 'select') viewer.setTool(new SelectTool(ed));
+  if (state.doc?.kind === '3d') {
+    if (name === 'zoomWindow' || EDIT_TOOLS[name] || name.startsWith('measure:') && name !== 'measure:dist') name = currentTool = name.startsWith('measure:') ? 'measure:dist' : 'select';
+    state.doc.view?.setTool(name);
+  } else if (name === 'select') viewer.setTool(new SelectTool(ed));
   else if (name === 'pan') viewer.setTool(new PanTool());
   else if (name === 'zoomWindow') viewer.setTool(new RectTool((bb) => { viewer.zoomToBox(bb, 0.02); setTool('select'); }, t('zoomWindow')));
   else if (name.startsWith('measure:')) viewer.setTool(new MeasureTool(name.slice(8), measureEnv));
@@ -697,7 +781,7 @@ function selectionChanged() {
 }
 
 function updateSelectionStatus() {
-  const n = state.selection.length;
+  const n = view3d() ? view3d().selection.length : state.selection.length;
   const el = $('#selCount');
   el.hidden = !n;
   el.textContent = n ? `${n.toLocaleString('en-US')} ${t('selected')}` : '';
@@ -732,7 +816,7 @@ function updateEditUi() {
 
 function updateTitle() {
   const doc = state.doc;
-  const name = doc?.kind === 'cad' ? doc.drawing.fileName : doc?.sheet?.fileName;
+  const name = doc?.kind === 'cad' ? doc.drawing.fileName : doc?.kind === '3d' ? doc.model.fileName : doc?.sheet?.fileName;
   const modified = !!state.edit?.modified;
   document.title = name ? `${modified ? '*' : ''}${name} – ProtoCAD Viewer` : 'ProtoCAD Viewer';
   platform.setModified(modified);
@@ -786,6 +870,7 @@ function setOrtho(on) {
 
 function setSnap(on) {
   state.snap = on;
+  view3d()?.setSnap(on);
   saveUiPrefs();
   updateEditUi();
   viewer.renderOverlay();
@@ -893,7 +978,7 @@ function setSideTab(name, focus = false) {
   if (!name) {
     sb.classList.remove('open');
     name = $('#sideTabs button.active:not([hidden])')?.dataset.tab;
-    if (!name || $(`#sideTabs [data-tab="${name}"]`).hidden) name = { pdf: 'search', image: 'info' }[state.doc?.kind] || 'layers';
+    if (!name || $(`#sideTabs [data-tab="${name}"]`).hidden) name = { pdf: 'search', image: 'info', '3d': 'model' }[state.doc?.kind] || 'layers';
   }
   for (const b of $$('#sideTabs button')) b.classList.toggle('active', b.dataset.tab === name);
   for (const p of $$('.tab-panel')) p.classList.toggle('active', p.dataset.panel === name);
@@ -1073,6 +1158,12 @@ function buildInfoPanel() {
       [t('blocks'), String(d.source === 'dgn' ? sp.analysis.blocks.length : [...d.blocks.keys()].filter((n) => !n.startsWith('*')).length)],
       ['Layouts', d.layouts.map((l) => l.name).join(', ') || '-']);
     if (sp.scene.warnings.length) rows.push([t('warnings'), sp.scene.warnings.slice(0, 12).join(', ')]);
+  } else if (doc?.kind === '3d') {
+    const m = doc.model;
+    rows.push([t('file'), m.fileName], ...m.info);
+    const b = doc.view?.sm.bbox();
+    if (b) rows.push([t('size'), `${[0, 1, 2].map((k) => formatNum(b[k + 3] - b[k])).join(' × ')} ${m.units?.label ?? ''}`.trim()]);
+    if (doc.fileSize) rows.push([t('fileSize'), formatBytes(doc.fileSize)]);
   } else if (doc?.kind === 'pdf') {
     const pdf = doc.sheet;
     rows.push([t('file'), pdf.fileName], [t('format'), 'PDF'], [t('pages'), String(pdf.pageCount)],
@@ -1165,7 +1256,22 @@ async function runSearch() {
   const doc = state.doc;
   ul.innerHTML = '';
   $('#searchCount').textContent = '';
-  if (!q.trim() || !doc) { state.highlights = []; state.pdfHits = []; viewer.renderOverlay(); return; }
+  if (!q.trim() || !doc) { state.highlights = []; state.pdfHits = []; view3d()?.highlight([]); viewer.renderOverlay(); return; }
+  if (doc.kind === '3d') {
+    const v = doc.view;
+    const ids = await v.search(q);
+    if ($('#searchInput').value !== q || state.doc !== doc) return;
+    v.highlight(ids);
+    $('#searchCount').textContent = ids.length ? `${ids.length >= 500 ? '500+' : ids.length} ${t('results')}` : t('noResults');
+    for (const id of ids) {
+      const d = v.describe(id);
+      const li = document.createElement('li');
+      li.innerHTML = `<span class="name"><bdi>${escapeHtml(d.name)}</bdi><span class="sub">${escapeHtml([d.type, d.where].filter(Boolean).join(' · '))}</span></span>`;
+      li.addEventListener('click', () => { v.select([id], true); v.reveal(id); closeSidebarOnMobile(); });
+      ul.append(li);
+    }
+    return;
+  }
   if (doc.kind === 'cad') {
     const sp = activeSpace();
     const res = search(sp.analysis, q);
@@ -1223,6 +1329,13 @@ function closeSidebarOnMobile() {
 // ---------------------------------------------------------------- properties
 function showProperties() {
   const dl = $('#propList');
+  if (view3d()) {
+    const v = view3d();
+    $('#propsFab').hidden = !v.selection.length;
+    v.renderProps(dl);
+    if (v.selection.length && window.innerWidth > 860 && $('#rightbar').hidden) openRight('props');
+    return;
+  }
   const sp = activeSpace();
   const items = sp ? state.selection.map((id) => sp.scene.items[id]).filter((it) => it && !it.deleted) : [];
   // On phones the panel is a drawer: a button offers it while something is selected.
@@ -1282,6 +1395,7 @@ let aiImage = { key: null, url: null };
 const assistant = new Assistant({
   async getDocument() {
     const doc = state.doc;
+    if (doc.kind === '3d') return { key: `3d|${doc.model.fileName}`, title: doc.model.fileName, text: doc.view.summary() };
     if (doc.kind === 'cad') {
       const sp = activeSpace();
       return { key: `${doc.drawing.fileName}|${sp.name}|v${state.edit?.version ?? 0}`, title: doc.drawing.fileName, text: drawingSummary(doc.drawing, sp.scene, sp.analysis, sp.name) };
@@ -1306,7 +1420,7 @@ const assistant = new Assistant({
   },
   captureView: () => {
     try {
-      return viewer.captureView();
+      return view3d() ? view3d().captureView() : viewer.captureView();
     } catch {
       // e.g. an SVG with embedded HTML makes the canvas unreadable in some browsers
       throw new Error(t('captureFailed'));
@@ -1315,6 +1429,11 @@ const assistant = new Assistant({
   tools: {
     async find_in_drawing({ query }) {
       const doc = state.doc;
+      if (doc.kind === '3d') {
+        const ids = await doc.view.search(query, 300);
+        doc.view.highlight(ids);
+        return { total: ids.length, matches: ids.slice(0, 60).map((id) => doc.view.describe(id)) };
+      }
       if (doc.kind === 'image') return { matches: [], total: 0, note: 'Images have no searchable text; read the attached image instead.' };
       if (doc.kind === 'pdf') {
         const hits = await doc.sheet.search(query, 60);
@@ -1331,6 +1450,13 @@ const assistant = new Assistant({
     },
     async zoom_to({ item_ids, page, text }) {
       const doc = state.doc;
+      if (doc.kind === '3d') {
+        const ids = (item_ids || []).filter((i) => doc.model.elements[i]);
+        doc.view.highlight(ids);
+        if (ids.length) doc.view.zoomTo(ids);
+        else doc.view.zoomExtents();
+        return { zoomed_to: ids.length };
+      }
       if (doc.sheet) {
         if (page) await gotoPage(page);
         if (text && doc.kind === 'pdf') {
@@ -1348,6 +1474,7 @@ const assistant = new Assistant({
       return { zoomed_to: ids.length };
     },
     async set_layers({ only, show, hide, reset }) {
+      if (view3d()) return view3d().setGroups({ only, show, hide, reset });
       const d = state.doc.drawing;
       if (!d) return { error: 'No CAD drawing is open (layers only exist in CAD drawings).' };
       const names = [...d.layers.keys()];
@@ -1363,6 +1490,7 @@ const assistant = new Assistant({
       return { visible: names.filter((n) => !state.hidden.has(n)) };
     },
     async item_details({ item_ids }) {
+      if (view3d()) return view3d().details(item_ids);
       const sp = activeSpace();
       if (!sp) return { error: 'No CAD drawing is open' };
       const o = sp.scene.origin;
@@ -1386,7 +1514,8 @@ function buildQuickPrompts() {
     const b = document.createElement('button');
     b.type = 'button';
     b.textContent = t(k);
-    b.addEventListener('click', () => sendAi(t(k + 'Prompt'), k === 'aiQuick4' ? true : undefined));
+    // 3D models have their own wording where it differs (bill of materials, review).
+    b.addEventListener('click', () => sendAi(t(state.doc?.kind === '3d' && t(k + 'Prompt3d') !== k + 'Prompt3d' ? k + 'Prompt3d' : k + 'Prompt'), k === 'aiQuick4' ? true : undefined));
     host.append(b);
   }
 }
@@ -1443,7 +1572,10 @@ async function sendAi(text, includeView) {
     frame = 0;
     bot.innerHTML = md.trim() ? renderMarkdown(md) : stopped ? '' : `<span class="thinking">${t('aiThinking')}</span>`;
     // References to items that do not exist in this drawing stay plain text.
-    for (const r of bot.querySelectorAll('.ref')) { const it = activeSpace()?.scene.items[+r.dataset.item]; if (!it || it.deleted) r.replaceWith(r.textContent); }
+    for (const r of bot.querySelectorAll('.ref')) {
+      const ok = view3d() ? !!state.doc.model.elements[+r.dataset.item] : (() => { const it = activeSpace()?.scene.items[+r.dataset.item]; return it && !it.deleted; })();
+      if (!ok) r.replaceWith(r.textContent);
+    }
     if (stopped) bot.insertAdjacentHTML('beforeend', `<div class="muted small">${t('aiStopped')}</div>`);
     log.scrollTop = log.scrollHeight;
   };
@@ -1475,6 +1607,7 @@ $('#aiLog').addEventListener('click', (ev) => {
   const ref = ev.target.closest('.ref');
   if (!ref) return;
   const id = Number(ref.dataset.item);
+  if (view3d()) { if (state.doc.model.elements[id]) { view3d().select([id], true); view3d().reveal(id); } return; }
   const it = activeSpace()?.scene.items[id];
   if (it && !it.deleted) {
     state.selection = [id];
@@ -1520,6 +1653,7 @@ $('#settingsDialog').addEventListener('close', () => {
   platform.setThemeMenu(state.theme);
   assistant.saveSettings({ apiKey: $('#sKey').value.trim(), model: $('#sModel').value, effort: $('#sEffort').value });
   viewer.setTheme(THEMES[state.theme]);
+  view3d()?.setTheme(THEMES[state.theme]);
   toast(t('saved'));
   const errs = $$('#aiLog .msg.error');
   if (assistant.settings.apiKey) errs.forEach((e) => e.remove());
@@ -1532,10 +1666,22 @@ function openPrint(toSave = false) {
   if (dlg.open) return;
   const kind = state.doc.kind;
   const isPdf = kind === 'pdf';
+  if (kind === '3d') {
+    // The 3D view is printed as a picture: rendered once now, at high resolution, on white.
+    try {
+      state.snap3d?.dispose();
+      state.snap3d = view3d().snapshotSheet();
+    } catch (err) {
+      toast(`${t('printFailed')}: ${err?.message || err}`, true, 7000);
+      return;
+    }
+  }
   $('.print-grid', dlg).hidden = isPdf;
   $('#pdfPrint').hidden = !isPdf;
   // Images use paper, orientation, area and title strip; scale/colour/lineweights are CAD-only.
   for (const el of $$('[data-print="cad"]', dlg)) el.hidden = kind !== 'cad';
+  for (const el of $$('[data-print="area"]', dlg)) el.hidden = kind === '3d';
+  for (const el of $$('[data-print="3d"]', dlg)) el.hidden = kind !== '3d';
   $('[data-print="pages"]', dlg).hidden = !(kind === 'image' && state.doc.sheet.pageCount > 1);
   $('#pDownload span').textContent = isPdf ? t('downloadOriginal') : t('downloadPdf');
   $('#pDesktopHint').hidden = !platform.isDesktop;
@@ -1571,10 +1717,10 @@ function readPrintOptions() {
 function plotOptions() {
   const p = readPrintOptions();
   const sp = activeSpace();
-  const sheet = activeSheet();
+  const sheet = printSheet();
   let area = sp ? sp.scene.bbox : sheet.bbox;
-  if (p.area === 'view') area = viewer.visibleBounds();
-  if (p.area === 'window' && p.window) area = p.window;
+  if (p.area === 'view' && !view3d()) area = viewer.visibleBounds();
+  if (p.area === 'window' && p.window && !view3d()) area = p.window;
   if (sheet) {
     // Images: the area is clipped to the picture and always fitted to the paper.
     const b = sheet.bbox;
@@ -1625,7 +1771,7 @@ function updatePrintPreview() {
     sp.renderer.draw(ctx, { scale: s * plan.k / dpr, bounds: vb, dpr }, { theme, hidden: isHidden, showLw: o.lineweights, model: sp.isLayout ? state.doc.spaces[0].renderer : null });
   } else {
     const w = (a[2] - a[0]) * plan.k * s, h = (a[3] - a[1]) * plan.k * s;
-    ctx.drawImage(activeSheet().renderArea(a, w, h), plan.ox * s, plan.oy * s, w, h);
+    ctx.drawImage(printSheet().renderArea(a, w, h), plan.ox * s, plan.oy * s, w, h);
   }
   ctx.restore();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1645,20 +1791,35 @@ function updatePrintPreview() {
   if (sheet?.pageCount > 1 && $('#pPages').value === 'all') $('#pInfo').textContent += ` · ${t('pagesAllCount').replace('{n}', sheet.pageCount)}`;
 }
 
+/** What prints for page-like documents: the PDF/image, or the 3D view's snapshot. */
+const printSheet = () => (state.doc?.kind === '3d' ? state.snap3d : activeSheet());
+
 function makePlotPdf() {
   const sp = activeSpace();
-  if (!sp) return exportImagePdf(activeSheet(), plotOptions());
+  if (!sp) return exportImagePdf(printSheet(), plotOptions());
   return exportPdf(sp.scene, plotOptions());
 }
 
 function pdfFileName() {
-  const base = (state.doc.kind === 'cad' ? state.doc.drawing.fileName : state.doc.sheet.fileName).replace(/\.[^.]+$/, '');
+  const base = (state.doc.kind === 'cad' ? state.doc.drawing.fileName : state.doc.kind === '3d' ? state.doc.model.fileName : state.doc.sheet.fileName).replace(/\.[^.]+$/, '');
   const sp = activeSpace();
   return `${base}${sp?.isLayout ? '-' + sp.name : ''}.pdf`;
 }
 
 const pdfFilters = () => [{ name: t('pdfFile'), extensions: ['pdf'] }];
 const csvFilters = () => [{ name: t('csvFile'), extensions: ['csv'] }];
+const pngFilters = () => [{ name: t('pngFile'), extensions: ['png'] }];
+
+/** Saves the 3D view as a PNG (about 3× the screen resolution). */
+async function savePng() {
+  const v = view3d();
+  if (!v) return;
+  try {
+    await saveAs(await v.pngBlob(), pdfFileName().replace(/\.pdf$/, '.png'), pngFilters());
+  } catch (err) {
+    toast(`${t('saveFailed')}: ${err?.message || err}`, true, 7000);
+  }
+}
 
 /** Saves an export: Save dialog on desktop (then says where it went), a download on the web. */
 async function saveAs(blob, name, filters) {
@@ -1709,6 +1870,9 @@ async function guarded(fn) {
   }
 }
 
+$('#printDialog').addEventListener('close', () => { state.snap3d?.dispose(); state.snap3d = null; });
+$('#pPng').addEventListener('click', () => guarded(savePng));
+
 $('#pDownload').addEventListener('click', () => guarded(async () => {
   if (state.doc.kind === 'pdf') {
     await saveAs(new Blob([state.doc.sheet.buffer], { type: 'application/pdf' }), state.doc.sheet.fileName, pdfFilters());
@@ -1736,11 +1900,12 @@ function onAction(action, el) {
   switch (action) {
     case 'open': chooseFile(); break;
     case 'sample': openSample(); break;
-    case 'extents': viewer.zoomExtents(); break;
+    case 'sample3d': openSample('cooling-water.pcf', 'cooling-water-sample.pcf'); break;
+    case 'extents': zoomExtentsActive(); break;
     case 'zoomWindow': setTool(currentTool === 'zoomWindow' ? 'select' : 'zoomWindow'); break;
-    case 'zoomIn': viewer.zoomAt(1.5); break;
-    case 'zoomOut': viewer.zoomAt(1 / 1.5); break;
-    case 'select': setTool('select'); state.selection = []; selectionChanged(); break;
+    case 'zoomIn': zoomActive(1.5); break;
+    case 'zoomOut': zoomActive(1 / 1.5); break;
+    case 'select': setTool('select'); state.selection = []; view3d()?.select([]); selectionChanged(); break;
     case 'pan': setTool(currentTool === 'pan' ? 'select' : 'pan'); break;
     case 'toggleEditbar': state.editbar = !state.editbar; saveUiPrefs(); updateEditUi(); break;
     case 'undo': undo(); break;
@@ -1748,8 +1913,29 @@ function onAction(action, el) {
     case 'save': saveDrawing(false); break;
     case 'saveAs': saveDrawing(true); break;
     case 'layerNew': newLayer(); break;
-    case 'measureMenu': toggleMenu(el); break;
-    case 'measure:clear': state.measures.length = 0; viewer.renderOverlay(); closeMenus(); break;
+    case 'measureMenu': toggleMenu(el, '#measureMenu'); break;
+    case 'viewsMenu': toggleMenu(el, '#viewsMenu'); break;
+    case 'measure:clear': state.measures.length = 0; view3d()?.clearMeasures(); viewer.renderOverlay(); closeMenus(); break;
+    case 'proj3d': if (view3d()) { $('#projLabel').textContent = view3d().toggleProjection() ? 'ORTHO' : 'PERSP'; updateStatus(); } break;
+    case 'section3d': {
+      const panel = $('#sectionPanel');
+      panel.hidden = !panel.hidden;
+      if (!panel.hidden && view3d()?.viewer.clip.mode === 'off') view3d().setSection('box');
+      break;
+    }
+    case 'sectionClose': $('#sectionPanel').hidden = true; break;
+    case 'wire3d': if (view3d()) $('#wireBtn').classList.toggle('active', view3d().setDisplay({ wireframe: !view3d().display.wireframe }).wireframe); break;
+    case 'xray3d': if (view3d()) $('#xrayBtn').classList.toggle('active', view3d().setDisplay({ xray: !view3d().display.xray }).xray); break;
+    case 'treeAll': view3d()?.showAll(); break;
+    case 'treeNone': view3d()?.hideAll(); break;
+    case 'savePng': closeMenus(); savePng(); break;
+    case 'bom3dCsv': {
+      const v = view3d();
+      if (!v) break;
+      const { name, text } = v.bomCsv();
+      saveAs(new Blob(['\ufeff' + text], { type: 'text/csv' }), name, csvFilters());
+      break;
+    }
     case 'print': openPrint(); break;
     case 'ai': openRight('ai'); break;
     case 'closeRight': closeRight(); break;
@@ -1774,6 +1960,14 @@ function onAction(action, el) {
     default:
       if (action.startsWith('measure:')) { setTool(action); closeMenus(); }
       else if (action.startsWith('cmd:')) runCommand(action.slice(4));
+      else if (action.startsWith('view3d:')) { view3d()?.setView(action.slice(7)); closeMenus(); }
+      else if (action.startsWith('sel3d:') && view3d()) {
+        const v = view3d(), op = action.slice(6);
+        if (op === 'zoom') v.zoomTo(v.selection);
+        else if (op === 'isolate') v.isolate(v.selection);
+        else if (op === 'hide') { v.setHidden([...v.hidden, ...v.selection]); v.select([]); }
+        else if (op === 'section') v.sectionAroundSelection();
+      }
   }
 }
 
@@ -1791,8 +1985,8 @@ $('#snapBtn').addEventListener('click', () => setSnap(!state.snap));
 $('#orthoBtn').addEventListener('click', () => setOrtho(!state.ortho));
 $('#curLayer').addEventListener('change', (ev) => { layerOp(() => state.edit?.setCurrentLayer(ev.target.value)); ev.target.blur(); });
 
-function toggleMenu(btn) {
-  const menu = $('#measureMenu');
+function toggleMenu(btn, id) {
+  const menu = $(id);
   const open = menu.hidden;
   closeMenus();
   if (!open) return;
@@ -1801,13 +1995,16 @@ function toggleMenu(btn) {
   menu.style.top = `${r.bottom + 4}px`;
   menu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8))}px`;
 }
-function closeMenus() { $('#measureMenu').hidden = true; $('#layerMenu').hidden = true; }
+function closeMenus() { $('#measureMenu').hidden = true; $('#viewsMenu').hidden = true; $('#layerMenu').hidden = true; }
 
 // On small screens the drawers close when the drawing is touched.
-$('#viewport').addEventListener('pointerdown', () => {
-  closeSidebarOnMobile();
-  if (window.innerWidth <= 860) closeRight();
-});
+for (const id of ['#viewport', '#viewport3d']) {
+  $(id).addEventListener('pointerdown', () => {
+    closeSidebarOnMobile();
+    if (window.innerWidth <= 860) closeRight();
+    closeMenus();
+  });
+}
 
 function closeRight() {
   $('#rightbar').hidden = true;
@@ -1818,9 +2015,10 @@ $('#snapToggle').addEventListener('change', (ev) => setSnap(ev.target.checked));
 $('#layerFilter').addEventListener('input', buildLayerPanel);
 $('#searchInput').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 220); });
 $('#fileInput').addEventListener('change', (ev) => {
-  const f = ev.target.files[0];
+  const files = [...ev.target.files];
   ev.target.value = '';
-  if (f) openFile(f);
+  if (files.length > 1) openHandedFiles(files);
+  else if (files[0]) openFile(files[0]);
 });
 
 /** Reload, print, find, find-next and view-source keys of the webview (desktop program). */
@@ -1835,7 +2033,7 @@ const TYPABLE = /^[\w@.,<>+\-#%:/\\* ]$/;
 
 document.addEventListener('keydown', (ev) => {
   // An open menu closes first, even when its Snap checkbox has the focus.
-  if (ev.key === 'Escape' && (!$('#measureMenu').hidden || !$('#layerMenu').hidden)) {
+  if (ev.key === 'Escape' && (!$('#measureMenu').hidden || !$('#viewsMenu').hidden || !$('#layerMenu').hidden)) {
     closeMenus();
     if (ev.target.closest('.menu')) ev.target.blur();
     ev.preventDefault();
@@ -1897,6 +2095,14 @@ document.addEventListener('keydown', (ev) => {
       return;
     }
   }
+  if (ev.key === 'Escape' && view3d()) {
+    // 3D: Esc drops the measurement in progress, then leaves the tool, then clears the selection.
+    if (view3d().cancel()) return;
+    if (currentTool !== 'select') { setTool('select'); return; }
+    view3d().select([]);
+    view3d().highlight([]);
+    return;
+  }
   if (ev.key === 'Escape') {
     // Esc with no measurement in progress leaves the tool.
     if (currentTool !== 'select') setTool('select');
@@ -1904,9 +2110,9 @@ document.addEventListener('keydown', (ev) => {
     state.selection = [];
     state.highlights = [];
     selectionChanged();
-  } else if ((ev.key === 'f' || ev.key === 'F' || ev.key === 'Home') && state.doc) viewer.zoomExtents();
-  else if ((ev.key === '+' || ev.key === '=') && state.doc) viewer.zoomAt(1.5);
-  else if (ev.key === '-' && state.doc) viewer.zoomAt(1 / 1.5);
+  } else if ((ev.key === 'f' || ev.key === 'F' || ev.key === 'Home') && state.doc) zoomExtentsActive();
+  else if ((ev.key === '+' || ev.key === '=') && state.doc) zoomActive(1.5);
+  else if (ev.key === '-' && state.doc) zoomActive(1 / 1.5);
   else if (ev.key === 'PageDown' && activeSheet()) gotoPage(activeSheet().pageNo + 1);
   else if (ev.key === 'PageUp' && activeSheet()) gotoPage(activeSheet().pageNo - 1);
 });
@@ -2044,9 +2250,9 @@ function onMenu(id) {
   else if (id === 'save-as') saveDrawing(true);
   else if (id === 'undo') undo();
   else if (id === 'redo') redo();
-  else if (id === 'zoom-extents') viewer.zoomExtents();
-  else if (id === 'zoom-in') viewer.zoomAt(1.5);
-  else if (id === 'zoom-out') viewer.zoomAt(1 / 1.5);
+  else if (id === 'zoom-extents') zoomExtentsActive();
+  else if (id === 'zoom-in') zoomActive(1.5);
+  else if (id === 'zoom-out') zoomActive(1 / 1.5);
 }
 
 function setTheme(name) {
@@ -2054,6 +2260,7 @@ function setTheme(name) {
   state.theme = name;
   saveUiPrefs();
   viewer.setTheme(THEMES[name]);
+  view3d()?.setTheme(THEMES[name]);
   platform.setThemeMenu(name);
 }
 
@@ -2097,12 +2304,13 @@ function initDesktop() {
   $('#recentClear').addEventListener('click', () => platform.clearRecent());
 }
 
-async function openSample() {
+async function openSample(file = 'plant.dxf', as = 'plant-room-sample.dxf') {
   try {
     showLoading(t('loading'));
-    const res = await fetch(new URL('samples/plant.dxf', document.baseURI));
+    const res = await fetch(new URL(`samples/${file}`, document.baseURI));
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
     const blob = await res.blob();
-    await openFile(new File([blob], 'plant-room-sample.dxf'));
+    await openFile(new File([blob], as));
   } catch (err) {
     toast(`${t('loadError')}: ${err.message}`, true);
     showLoading(null);
@@ -2135,5 +2343,6 @@ showProperties();
 updateEditUi();
 if (platform.isDesktop) initDesktop();
 if (new URLSearchParams(location.search).has('sample')) openSample();
+else if (new URLSearchParams(location.search).has('sample3d')) openSample('cooling-water.pcf', 'cooling-water-sample.pcf');
 platform.registerServiceWorker();
-window.protocad = { state, viewer, openFile, ed, ops, saveDrawing, setTool, runCommand, submitCommand, activeSpace };
+window.protocad = { state, viewer, openFile, openHandedFiles, ed, ops, saveDrawing, setTool, runCommand, submitCommand, activeSpace, view3d, assistant };
