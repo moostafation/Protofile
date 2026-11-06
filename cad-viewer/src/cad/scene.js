@@ -8,7 +8,10 @@
 //   HATCH   { rings, segs: Float64Array (x0,y0,x1,y1,...) }
 //   POINT   { x, y }
 //   VPORT   { x, y, w, h, viewX, viewY, viewH, twist } (paper space viewports)
-// Every primitive also has rgb, lw (mm or LW_* marker), layer, item, bb.
+// Every primitive also has rgb, lw (mm or LW_* marker), layer, item, bb, and `lc`: the layer whose
+// colour it shows (ByLayer, also through ByBlock), so a layer colour change only recolours.
+// Edits rebuild single items (updateScene): their old primitives are flagged `dead` and the new
+// ones are appended, so item ids stay stable and nothing else is re-tessellated.
 
 import { FOREGROUND, aciToRgb } from './aci.js';
 import {
@@ -40,6 +43,8 @@ class SceneBuilder {
     this.shift = translate(-this.origin.x, -this.origin.y);
     this.infinite = opts.infiniteLength || 1e6;
     this.insertCounts = new Map();
+    this.itemOf = new Map(); // top-level entity -> item id
+    this.deadCount = 0;
     this.warnings = new Set();
     this.dimArrow = (drawing.header.DIMASZ || 2.5) * (drawing.header.DIMSCALE || 1);
   }
@@ -52,14 +57,19 @@ class SceneBuilder {
   }
 
   colorOf(e, layer, ctx) {
-    if (typeof e.color === 'number' && e.color >= 0) return e.color === 0xffffff ? FOREGROUND : e.color;
+    return this.colorSource(e, layer, ctx)[0];
+  }
+
+  /** [rgb, layer the colour comes from (ByLayer, also inherited through ByBlock) or null]. */
+  colorSource(e, layer, ctx) {
+    if (typeof e.color === 'number' && e.color >= 0) return [e.color === 0xffffff ? FOREGROUND : e.color, null];
     const ci = e.colorIndex ?? 256;
     if (ci === 256) {
       const l = this.d.layers.get(layer);
-      return l ? l.rgb : FOREGROUND;
+      return [l ? l.rgb : FOREGROUND, layer];
     }
-    if (ci === 0) return ctx.rgb ?? FOREGROUND;
-    return aciToRgb(Math.abs(ci));
+    if (ci === 0) return [ctx.rgb ?? FOREGROUND, ctx.lc ?? null];
+    return [aciToRgb(Math.abs(ci)), null];
   }
 
   lwOf(e, layer, ctx) {
@@ -95,17 +105,17 @@ class SceneBuilder {
 
   style(e, ctx, m) {
     const layer = this.layerOf(e, ctx);
-    const rgb = this.colorOf(e, layer, ctx);
+    const [rgb, lc] = this.colorSource(e, layer, ctx);
     const lw = this.lwOf(e, layer, ctx);
     const ltype = this.ltypeOf(e, layer, ctx);
-    return { layer, rgb, lw, ltype, dash: this.dashOf(ltype, e, m) };
+    return { layer, rgb, lc, lw, ltype, dash: this.dashOf(ltype, e, m) };
   }
 
   // ---------- primitive emitters ----------
   stroke(ctx, st, localPts, closed, m, extra) {
     if (localPts.length < 4) return;
     const pts = transformFlat(mul(this.shift, m), localPts);
-    const p = { k: STROKE, pts, closed: !!closed, rgb: st.rgb, lw: st.lw, dash: st.dash, layer: st.layer, item: ctx.item, bb: bboxOf(pts) };
+    const p = { k: STROKE, pts, closed: !!closed, rgb: st.rgb, lc: st.lc, lw: st.lw, dash: st.dash, layer: st.layer, item: ctx.item, bb: bboxOf(pts) };
     if (extra) Object.assign(p, extra);
     this.prims.push(p);
     return p;
@@ -117,7 +127,7 @@ class SceneBuilder {
     if (!out.length) return;
     const bb = [Infinity, Infinity, -Infinity, -Infinity];
     for (const r of out) bboxOf(r, bb);
-    const p = { k: FILL, rings: out, rgb: st.rgb, lw: st.lw, layer: st.layer, item: ctx.item, bb };
+    const p = { k: FILL, rings: out, rgb: st.rgb, lc: st.lc, lw: st.lw, layer: st.layer, item: ctx.item, bb };
     if (extra) Object.assign(p, extra);
     this.prims.push(p);
     return p;
@@ -145,7 +155,7 @@ class SceneBuilder {
     const p = {
       k: TEXT, x: wx, y: wy, rot: R, h: H, wf, obl: oblique,
       lines: lines.map((l) => ({ s: l.s, dx: l.dx * s, dy: l.dy * s, w: l.w * s })),
-      rgb: st.rgb, lw: st.lw, layer: st.layer, item: ctx.item, bb,
+      rgb: st.rgb, lc: st.lc, lw: st.lw, layer: st.layer, item: ctx.item, bb,
     };
     this.prims.push(p);
     return p;
@@ -153,7 +163,7 @@ class SceneBuilder {
 
   point(ctx, st, x, y, m) {
     const [wx, wy] = apply(mul(this.shift, m), x, y);
-    this.prims.push({ k: POINT, x: wx, y: wy, rgb: st.rgb, lw: st.lw, layer: st.layer, item: ctx.item, bb: [wx, wy, wx, wy] });
+    this.prims.push({ k: POINT, x: wx, y: wy, rgb: st.rgb, lc: st.lc, lw: st.lw, layer: st.layer, item: ctx.item, bb: [wx, wy, wx, wy] });
   }
 
   // ---------- entities ----------
@@ -387,7 +397,7 @@ class SceneBuilder {
       return;
     }
     if (depth > MAX_DEPTH) return;
-    const child = { ...ctx, m, layer: st.layer, rgb: st.rgb, lw: st.lw, ltype: st.ltype, depth: depth + 1 };
+    const child = { ...ctx, m, layer: st.layer, rgb: st.rgb, lc: st.lc, lw: st.lw, ltype: st.ltype, depth: depth + 1 };
     for (const sub of block.entities) {
       if (sub.type === 'ATTDEF' && !((sub.flags ?? 0) & 2)) continue;
       this.entity(sub, child);
@@ -398,33 +408,56 @@ class SceneBuilder {
     return HANDLERS;
   }
 
-  addItem(e, extra) {
-    const id = this.items.length;
-    this.items.push({ id, type: e.type, handle: e.handle, layer: e.layer ?? '0', ent: e, ...extra });
-    return id;
-  }
-
   build(entities) {
     for (const e of entities) {
       if (e.type === 'VIEWPORT' && e.viewportId === 1) continue;
-      const first = this.prims.length;
-      const item = this.addItem(e);
-      this.entity(e, { m: IDENTITY, item, depth: 0, layer: null, rgb: null, lw: null, ltype: null });
-      const it = this.items[item];
-      it.first = first;
-      it.last = this.prims.length;
-      const bb = [Infinity, Infinity, -Infinity, -Infinity];
-      for (let i = first; i < this.prims.length; i++) {
-        const p = this.prims[i];
-        if (p.infinite) continue;
-        if (p.bb[0] < bb[0]) bb[0] = p.bb[0];
-        if (p.bb[1] < bb[1]) bb[1] = p.bb[1];
-        if (p.bb[2] > bb[2]) bb[2] = p.bb[2];
-        if (p.bb[3] > bb[3]) bb[3] = p.bb[3];
-      }
-      it.bb = bb;
-      if (e.type === 'INSERT') this.insertCounts.set(e.name, (this.insertCounts.get(e.name) || 0) + 1);
+      this.buildItem(e, null);
     }
+  }
+
+  /** Tessellates a top-level entity into a new item, or into `it` (an existing item being rebuilt). */
+  buildItem(e, it) {
+    const first = this.prims.length;
+    if (!it) {
+      it = { id: this.items.length, ent: e };
+      this.items.push(it);
+      this.itemOf.set(e, it.id);
+    }
+    it.type = e.type;
+    it.handle = e.handle;
+    it.layer = e.layer ?? '0';
+    it.deleted = false;
+    this.entity(e, { m: IDENTITY, item: it.id, depth: 0, layer: null, rgb: null, lc: null, lw: null, ltype: null });
+    it.first = first;
+    it.last = this.prims.length;
+    const bb = [Infinity, Infinity, -Infinity, -Infinity];
+    for (let i = first; i < this.prims.length; i++) {
+      const p = this.prims[i];
+      if (p.infinite) continue;
+      if (p.bb[0] < bb[0]) bb[0] = p.bb[0];
+      if (p.bb[1] < bb[1]) bb[1] = p.bb[1];
+      if (p.bb[2] > bb[2]) bb[2] = p.bb[2];
+      if (p.bb[3] > bb[3]) bb[3] = p.bb[3];
+    }
+    it.bb = bb;
+    if (e.type === 'INSERT') this.insertCounts.set(e.name, (this.insertCounts.get(e.name) || 0) + 1);
+    return it;
+  }
+
+  /** Flags an item's primitives as dead (they stay in the array so indices do not move). */
+  killItem(it, removed) {
+    for (let i = it.first; i < it.last; i++) {
+      const p = this.prims[i];
+      if (p.dead) continue;
+      p.dead = true;
+      removed.push(i);
+      this.deadCount++;
+    }
+    if (it.ent.type === 'INSERT' && !it.deleted) {
+      const n = (this.insertCounts.get(it.ent.name) || 1) - 1;
+      if (n > 0) this.insertCounts.set(it.ent.name, n); else this.insertCounts.delete(it.ent.name);
+    }
+    it.first = it.last = 0;
   }
 }
 
@@ -558,7 +591,7 @@ const HANDLERS = {
         this.insertBlock(blockName, m, ctx, st, ctx.depth);
       }
     }
-    for (const a of e.attribs ?? []) this.entity(a, { ...ctx, layer: ctx.layer, rgb: st.rgb, lw: st.lw, ltype: st.ltype });
+    for (const a of e.attribs ?? []) this.entity(a, { ...ctx, layer: ctx.layer, rgb: st.rgb, lc: st.lc, lw: st.lw, ltype: st.ltype });
   },
   DIMENSION(e, ctx) {
     const st = this.style(e, ctx, ctx.m);
@@ -612,7 +645,7 @@ const HANDLERS = {
     const solid = e.solidFill === 1 || /^solid$/i.test(e.patternName || '');
     if (solid || e.gradientFlag === 1) {
       const p = this.fill(ctx, st, rings, m);
-      if (p && e.gradientFlag === 1 && typeof e.gradientRgb === 'number') p.rgb = e.gradientRgb;
+      if (p && e.gradientFlag === 1 && typeof e.gradientRgb === 'number') { p.rgb = e.gradientRgb; p.lc = null; }
       return;
     }
     const segs = this.patternSegments(e, rings, m);
@@ -621,10 +654,10 @@ const HANDLERS = {
     const bb = [Infinity, Infinity, -Infinity, -Infinity];
     for (const r of wr) bboxOf(r, bb);
     if (!segs) {
-      this.prims.push({ k: FILL, rings: wr, alpha: 0.25, rgb: st.rgb, lw: st.lw, layer: st.layer, item: ctx.item, bb });
+      this.prims.push({ k: FILL, rings: wr, alpha: 0.25, rgb: st.rgb, lc: st.lc, lw: st.lw, layer: st.layer, item: ctx.item, bb });
       return;
     }
-    this.prims.push({ k: HATCH, rings: wr, segs, rgb: st.rgb, lw: st.lw, layer: st.layer, item: ctx.item, bb });
+    this.prims.push({ k: HATCH, rings: wr, segs, rgb: st.rgb, lc: st.lc, lw: st.lw, layer: st.layer, item: ctx.item, bb });
   },
   SOLID(e, ctx) {
     const m = mul(ctx.m, ocsMatrix(e.extrusionDirection));
@@ -706,7 +739,7 @@ const HANDLERS = {
       k: VPORT, x, y, w, h,
       viewX: view.x + (e.viewCenter ? 0 : target.x), viewY: view.y + (e.viewCenter ? 0 : target.y),
       viewH: e.viewHeight || h, twist: e.viewTwistAngle || 0,
-      rgb: st.rgb, lw: st.lw, layer: st.layer, item: ctx.item, bb: [x - w / 2, y - h / 2, x + w / 2, y + h / 2],
+      rgb: st.rgb, lc: st.lc, lw: st.lw, layer: st.layer, item: ctx.item, bb: [x - w / 2, y - h / 2, x + w / 2, y + h / 2],
     });
   },
 };
@@ -768,7 +801,100 @@ export function buildScene(drawing, entities, opts = {}) {
   const b = new SceneBuilder(drawing, { ...opts, origin });
   b.build(entities);
   const bbox = robustExtents(b.prims);
-  return { prims: b.prims, items: b.items, origin, bbox, insertCounts: b.insertCounts, warnings: [...b.warnings] };
+  const scene = { prims: b.prims, items: b.items, origin, bbox, insertCounts: b.insertCounts, warnings: [...b.warnings], itemOf: b.itemOf, version: 0 };
+  // Kept for incremental updates; not enumerable so scenes stay plain data for tests and the AI summary.
+  Object.defineProperty(scene, 'builder', { value: b, enumerable: false });
+  return scene;
+}
+
+/** Number of items that were not deleted by edits. */
+export function liveItemCount(scene) {
+  let n = 0;
+  for (const it of scene.items) if (!it.deleted) n++;
+  return n;
+}
+
+/**
+ * Incremental update after an edit. `rebuild`: top-level entities that are new or changed
+ * (tessellated again, appended to `prims`); `remove`: entities that left this space.
+ * Returns the primitive indices that died and were added, and the touched item ids.
+ */
+export function updateScene(scene, { rebuild = [], remove = [] }) {
+  const b = scene.builder;
+  const out = { removed: [], added: [], items: [] };
+  for (const e of remove) {
+    const id = b.itemOf.get(e);
+    if (id === undefined) continue;
+    const it = b.items[id];
+    if (it.deleted) continue;
+    b.killItem(it, out.removed);
+    it.deleted = true;
+    it.bb = [Infinity, Infinity, -Infinity, -Infinity];
+    out.items.push(id);
+  }
+  for (const e of rebuild) {
+    if (e.type === 'VIEWPORT' && e.viewportId === 1) continue;
+    const id = b.itemOf.get(e);
+    const it = id === undefined ? null : b.items[id];
+    if (it && !it.deleted) b.killItem(it, out.removed);
+    const start = b.prims.length;
+    const built = b.buildItem(e, it);
+    for (let i = start; i < b.prims.length; i++) out.added.push(i);
+    out.items.push(built.id);
+  }
+  // Grow (never shrink) the extents so zoom extents includes new geometry.
+  const bb = scene.bbox;
+  for (const i of out.added) {
+    const p = b.prims[i];
+    if (p.infinite || !Number.isFinite(p.bb[0])) continue;
+    if (p.bb[0] < bb[0]) bb[0] = p.bb[0];
+    if (p.bb[1] < bb[1]) bb[1] = p.bb[1];
+    if (p.bb[2] > bb[2]) bb[2] = p.bb[2];
+    if (p.bb[3] > bb[3]) bb[3] = p.bb[3];
+  }
+  scene.warnings = [...b.warnings];
+  scene.version++;
+  return out;
+}
+
+/** Share of dead primitives; above ~30% a compaction pays off. */
+export function deadRatio(scene) {
+  return scene.builder ? scene.builder.deadCount / Math.max(1, scene.prims.length) : 0;
+}
+
+/**
+ * Drops dead primitives in place (item ids stay; primitive indices change, so the renderer
+ * and the pick index must be rebuilt afterwards).
+ */
+export function compactScene(scene) {
+  const b = scene.builder;
+  const prims = [];
+  for (const it of b.items) {
+    const first = prims.length;
+    for (let i = it.first; i < it.last; i++) if (!b.prims[i].dead) prims.push(b.prims[i]);
+    it.first = first;
+    it.last = prims.length;
+  }
+  b.prims.length = 0;
+  for (const p of prims) b.prims.push(p);
+  b.deadCount = 0;
+  scene.version++;
+}
+
+/** Layer colour changed: primitives that show the layer's colour take the new one. */
+export function recolorLayer(scene, layer, rgb) {
+  for (const p of scene.prims) if (p.lc === layer) p.rgb = rgb;
+  scene.version++;
+}
+
+/** Layer renamed: primitives and items follow (entities were renamed by the edit). */
+export function renameLayerInScene(scene, from, to) {
+  for (const p of scene.prims) {
+    if (p.layer === from) p.layer = to;
+    if (p.lc === from) p.lc = to;
+  }
+  for (const it of scene.items) if (it.layer === from) it.layer = to;
+  scene.version++;
 }
 
 /**

@@ -67,43 +67,80 @@ export class CadRenderer {
     this.build();
   }
 
+  /**
+   * Groups primitives into a 12 x 12 grid of tiles (plus one global tile for huge and infinite
+   * ones). Each tile keeps its primitive indices, so an edit only rebuilds the tiles it touches.
+   */
   build() {
     const { prims, bbox } = this.scene;
     const [x0, y0, x1, y1] = bbox;
-    const w = Math.max(x1 - x0, 1e-9), h = Math.max(y1 - y0, 1e-9);
-    const cells = new Map();
-    const global = this.newTile();
-    const tileOf = (p) => {
-      if (p.infinite || p.k === VPORT) return global;
-      const bw = p.bb[2] - p.bb[0], bh = p.bb[3] - p.bb[1];
-      if (bw > w / 3 || bh > h / 3) return global;
-      const cx = (p.bb[0] + p.bb[2]) / 2, cy = (p.bb[1] + p.bb[3]) / 2;
-      const i = Math.min(GRID - 1, Math.max(0, Math.floor(((cx - x0) / w) * GRID)));
-      const j = Math.min(GRID - 1, Math.max(0, Math.floor(((cy - y0) / h) * GRID)));
-      const key = j * GRID + i;
-      let t = cells.get(key);
-      if (!t) { t = this.newTile(); cells.set(key, t); }
-      return t;
-    };
+    this.grid = { x0, y0, w: Math.max(x1 - x0, 1e-9), h: Math.max(y1 - y0, 1e-9) };
+    this.cells = new Map();
+    this.global = this.newTile();
+    this.tiles = [this.global];
     for (let idx = 0; idx < prims.length; idx++) {
+      if (prims[idx].dead) continue;
+      this.place(idx);
+    }
+    for (const t of this.tiles) this.rebuildTile(t);
+    this.highlight = null;
+  }
+
+  tileOf(p) {
+    const { x0, y0, w, h } = this.grid;
+    if (p.infinite || p.k === VPORT) return this.global;
+    const bw = p.bb[2] - p.bb[0], bh = p.bb[3] - p.bb[1];
+    if (bw > w / 3 || bh > h / 3) return this.global;
+    const cx = (p.bb[0] + p.bb[2]) / 2, cy = (p.bb[1] + p.bb[3]) / 2;
+    const i = Math.min(GRID - 1, Math.max(0, Math.floor(((cx - x0) / w) * GRID)));
+    const j = Math.min(GRID - 1, Math.max(0, Math.floor(((cy - y0) / h) * GRID)));
+    const key = j * GRID + i;
+    let t = this.cells.get(key);
+    if (!t) { t = this.newTile(); this.cells.set(key, t); this.tiles.push(t); }
+    return t;
+  }
+
+  place(idx) {
+    const p = this.scene.prims[idx];
+    const t = this.tileOf(p);
+    t.ids.push(idx);
+    p._tile = t;
+    t.dirty = true;
+    return t;
+  }
+
+  /** Rebuilds a tile's batches from its live primitives. */
+  rebuildTile(t) {
+    const prims = this.scene.prims;
+    const items = this.scene.items;
+    t.strokes = new Map();
+    t.fills = new Map();
+    t.texts = [];
+    t.others = [];
+    t.bb = [Infinity, Infinity, -Infinity, -Infinity];
+    const live = [];
+    for (const idx of t.ids) {
       const p = prims[idx];
-      const t = tileOf(p);
+      if (!p || p.dead || p._tile !== t) continue;
+      live.push(idx);
       if (!p.infinite) {
         t.bb[0] = Math.min(t.bb[0], p.bb[0]); t.bb[1] = Math.min(t.bb[1], p.bb[1]);
         t.bb[2] = Math.max(t.bb[2], p.bb[2]); t.bb[3] = Math.max(t.bb[3], p.bb[3]);
       } else {
         t.bb = [-Infinity, -Infinity, Infinity, Infinity];
       }
-      const top = this.scene.items[p.item]?.layer ?? p.layer;
+      const top = items[p.item]?.layer ?? p.layer;
+      // ByLayer colours are batched by layer so a layer colour change only recolours the batch.
+      const color = p.lc != null ? 'L:' + p.lc : p.rgb;
       if (p.k === STROKE) {
-        const bkey = `${p.layer}|${top}|${p.rgb}|${p.lw}|${p.ww || 0}|${p.dash ? p.dash.join(',') : ''}`;
+        const bkey = `${p.layer}|${top}|${color}|${p.lw}|${p.ww || 0}|${p.dash ? p.dash.join(',') : ''}`;
         let b = t.strokes.get(bkey);
-        if (!b) { b = { layer: p.layer, top, rgb: p.rgb, lw: p.lw, ww: p.ww || 0, dash: p.dash, path: new Path2D() }; t.strokes.set(bkey, b); }
+        if (!b) { b = { layer: p.layer, top, lc: p.lc, rgb: p.rgb, lw: p.lw, ww: p.ww || 0, dash: p.dash, path: new Path2D() }; t.strokes.set(bkey, b); }
         addPolyline(b.path, p.pts, p.closed);
       } else if (p.k === FILL && p.rings.length === 1 && !p.bg) {
-        const bkey = `${p.layer}|${top}|${p.rgb}|${p.alpha || 1}`;
+        const bkey = `${p.layer}|${top}|${color}|${p.alpha || 1}`;
         let b = t.fills.get(bkey);
-        if (!b) { b = { layer: p.layer, top, rgb: p.rgb, alpha: p.alpha || 1, path: new Path2D() }; t.fills.set(bkey, b); }
+        if (!b) { b = { layer: p.layer, top, lc: p.lc, rgb: p.rgb, alpha: p.alpha || 1, path: new Path2D() }; t.fills.set(bkey, b); }
         addPolyline(b.path, p.rings[0], true);
       } else if (p.k === TEXT) {
         t.texts.push(idx);
@@ -111,11 +148,50 @@ export class CadRenderer {
         t.others.push(idx);
       }
     }
-    this.tiles = [global, ...cells.values()];
+    t.ids = live;
+    t.dirty = false;
   }
 
   newTile() {
-    return { bb: [Infinity, Infinity, -Infinity, -Infinity], strokes: new Map(), fills: new Map(), texts: [], others: [] };
+    return { bb: [Infinity, Infinity, -Infinity, -Infinity], ids: [], strokes: new Map(), fills: new Map(), texts: [], others: [], dirty: false };
+  }
+
+  /**
+   * Applies an edit (see updateScene): dead primitives leave their tiles, new ones are placed.
+   * Only the touched tiles are rebuilt, lazily at the next draw.
+   */
+  update({ removed = [], added = [] }) {
+    const prims = this.scene.prims;
+    for (const idx of removed) {
+      const t = prims[idx]?._tile;
+      if (t) t.dirty = true;
+    }
+    for (const idx of added) this.place(idx);
+    this.highlight = null;
+  }
+
+  /** Layer colour changed: batches showing that layer's colour are recoloured (no rebuild). */
+  recolor(layer, rgb) {
+    for (const t of this.tiles) {
+      for (const b of t.strokes.values()) if (b.lc === layer) b.rgb = rgb;
+      for (const b of t.fills.values()) if (b.lc === layer) b.rgb = rgb;
+    }
+  }
+
+  /** Layer renamed (the scene's primitives were renamed first): batches are rebuilt with the new name. */
+  renameLayer() {
+    for (const t of this.tiles) t.dirty = true;
+    this.highlight = null;
+  }
+
+  /** Visible tiles, rebuilding the ones an edit touched. */
+  visibleTiles(visible) {
+    const out = [];
+    for (const t of this.tiles) {
+      if (t.dirty) this.rebuildTile(t);
+      if (t.ids.length && visible(t.bb)) out.push(t);
+    }
+    return out;
   }
 
   /**
@@ -128,7 +204,7 @@ export class CadRenderer {
     const vb = view.bounds;
     const visible = (bb) => bb[2] >= vb[0] && bb[0] <= vb[2] && bb[3] >= vb[1] && bb[1] <= vb[3];
     const itemHidden = this.itemHiddenFn(o);
-    const tiles = this.tiles.filter((t) => visible(t.bb));
+    const tiles = this.visibleTiles(visible);
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
 
@@ -245,41 +321,49 @@ export class CadRenderer {
     ctx.restore();
   }
 
-  /** Draws the given items in a highlight colour (selection / search hits). */
+  /**
+   * Draws the given items in a highlight colour (selection / search hits). The paths are
+   * cached per item list and scene version, so large selections stay cheap to redraw.
+   */
   drawItems(ctx, view, items, color, widthPx = 3) {
     const px = 1 / view.scale;
+    const scene = this.scene;
+    let h = this.highlight?.items === items && this.highlight.version === scene.version ? this.highlight : null;
+    if (!h) {
+      h = { items, version: scene.version, strokes: new Path2D(), fills: new Path2D(), texts: [], points: [], boxes: [] };
+      for (const i of items) {
+        const it = scene.items[i];
+        if (!it || it.deleted) continue;
+        for (let k = it.first; k < it.last; k++) {
+          const p = scene.prims[k];
+          if (p.dead) continue;
+          if (p.k === STROKE) addPolyline(h.strokes, p.pts, p.closed);
+          else if (p.k === FILL || p.k === HATCH) for (const r of p.rings) addPolyline(h.fills, r, true);
+          else if (p.k === TEXT) h.texts.push(p);
+          else if (p.k === POINT) h.points.push(p);
+        }
+        if (it.bb && Number.isFinite(it.bb[0])) h.boxes.push(it.bb);
+      }
+      // Two highlight lists are shown at a time (selection and search hits): keep the last one only.
+      this.highlight = h;
+    }
     ctx.save();
     ctx.strokeStyle = color;
     ctx.fillStyle = color;
     ctx.lineWidth = widthPx * px;
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
-    for (const i of items) {
-      const it = this.scene.items[i];
-      if (!it) continue;
-      for (let k = it.first; k < it.last; k++) {
-        const p = this.scene.prims[k];
-        if (p.k === STROKE) {
-          const path = new Path2D();
-          addPolyline(path, p.pts, p.closed);
-          ctx.stroke(path);
-        } else if (p.k === FILL || p.k === HATCH) {
-          ctx.globalAlpha = 0.35;
-          ctx.fill(ringsPath(p.rings), 'evenodd');
-          ctx.globalAlpha = 1;
-        } else if (p.k === TEXT) {
-          drawText(ctx, p, px, color);
-        } else if (p.k === POINT) {
-          ctx.fillRect(p.x - 3 * px, p.y - 3 * px, 6 * px, 6 * px);
-        }
-      }
-      if (it.bb && Number.isFinite(it.bb[0])) {
-        ctx.save();
-        ctx.setLineDash([4 * px, 3 * px]);
-        ctx.lineWidth = px;
-        ctx.strokeRect(it.bb[0] - 4 * px, it.bb[1] - 4 * px, it.bb[2] - it.bb[0] + 8 * px, it.bb[3] - it.bb[1] + 8 * px);
-        ctx.restore();
-      }
+    ctx.stroke(h.strokes);
+    ctx.globalAlpha = 0.35;
+    ctx.fill(h.fills, 'evenodd');
+    ctx.globalAlpha = 1;
+    for (const p of h.texts) drawText(ctx, p, px, color);
+    for (const p of h.points) ctx.fillRect(p.x - 3 * px, p.y - 3 * px, 6 * px, 6 * px);
+    // Dashed boxes help to find a few small items; for many items they are only noise.
+    if (h.boxes.length <= 40) {
+      ctx.setLineDash([4 * px, 3 * px]);
+      ctx.lineWidth = px;
+      for (const bb of h.boxes) ctx.strokeRect(bb[0] - 4 * px, bb[1] - 4 * px, bb[2] - bb[0] + 8 * px, bb[3] - bb[1] + 8 * px);
     }
     ctx.restore();
   }
