@@ -8,12 +8,23 @@ import { CadRenderer, measureText, colorCss } from './render/cad-renderer.js';
 import { PAPERS, exportPdf, exportImagePdf, planPlot } from './render/pdf-export.js';
 import { resolveFormat, openBuffer, acceptAttribute, supportedGroups, formatFor, SNIFF_BYTES, FORMATS, openableExtensions, openableByCategory } from './formats/registry.js';
 import { FormatError } from './formats/errors.js';
-import { buildScene, STROKE } from './cad/scene.js';
+import { buildScene, updateScene, compactScene, deadRatio, recolorLayer, renameLayerInScene, liveItemCount, STROKE } from './cad/scene.js';
 import { UNIT_NAMES } from './cad/drawing.js';
 import { polygonArea } from './cad/geometry.js';
 import { PickIndex } from './tools/pick.js';
-import { analyze, search, bomCsv, layersCsv, drawingSummary, formatNum } from './tools/analysis.js';
-import { SelectTool, RectTool, MeasureTool, drawMeasurements, formatLength, formatArea } from './tools/tools.js';
+import { analyze, annotateItem, search, bomCsv, layersCsv, drawingSummary, formatNum } from './tools/analysis.js';
+import { RectTool, MeasureTool, drawMeasurements, formatLength, formatArea } from './tools/tools.js';
+import {
+  SelectTool, PanTool, LineTool, PolylineTool, RectangleTool, CircleTool, ArcTool, TextTool, RevCloudTool,
+  MoveTool, RotateTool, ScaleTool, MirrorTool, OffsetTool, ImmediateTool,
+} from './tools/edit-tools.js';
+import { ALIASES } from './tools/cmdline.js';
+import { EditDoc } from './edit/model.js';
+import { gripsOf } from './edit/entities.js';
+import * as ops from './edit/ops.js';
+import { writeDxf } from './cad/dxf-writer.js';
+import { renderPropsEditor } from './ui/props-editor.js';
+import { openColorPicker, closeColorPicker } from './ui/color-picker.js';
 import { Assistant } from './ai/assistant.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -30,7 +41,7 @@ function loadUiPrefs() {
   try { return JSON.parse(localStorage.getItem('protocad.ui') || '{}'); } catch { return {}; }
 }
 function saveUiPrefs() {
-  try { localStorage.setItem('protocad.ui', JSON.stringify({ theme: state.theme, showLw: state.showLw })); } catch { /* storage unavailable */ }
+  try { localStorage.setItem('protocad.ui', JSON.stringify({ theme: state.theme, showLw: state.showLw, editbar: state.editbar, snap: state.snap, ortho: state.ortho })); } catch { /* storage unavailable */ }
 }
 
 const prefs = loadUiPrefs();
@@ -43,7 +54,10 @@ const state = {
   measures: [],
   theme: THEMES[prefs.theme] ? prefs.theme : 'dark',
   showLw: !!prefs.showLw,
-  snap: true,
+  snap: prefs.snap ?? true,
+  ortho: !!prefs.ortho,
+  editbar: prefs.editbar ?? window.innerWidth > 860, // the Draw/Modify bar is shown
+  edit: null, // EditDoc of the open CAD drawing
   sheetScale: null, // calibrated { factor, unit } for PDFs and images
   print: { paper: 'A3', orientation: 'auto', area: 'extents', scale: 'fit', color: 'mono', lw: true, stamp: true, window: null },
 };
@@ -55,30 +69,126 @@ const viewer = new Viewer($('#viewport'), {
   drawOverlay: (o, v) => drawOverlay(o, v),
 });
 
-// ---------------------------------------------------------------- app API used by tools
-const app = {
+const isHidden = (layer) => state.hidden.has(layer);
+const activeSpace = () => (state.doc?.kind === 'cad' ? state.doc.spaces[state.doc.active] : null);
+/** Spaces whose scene exists (layouts are built when first shown). */
+const builtSpaces = () => (state.doc?.kind === 'cad' ? state.doc.spaces.filter((sp) => !sp.lazy) : []);
+/** Items on locked layers cannot be selected for editing. */
+const isLockedItem = (id) => {
+  const it = activeSpace()?.scene.items[id];
+  return !!(it && state.doc.drawing.layers.get(it.layer)?.locked);
+};
+const editCtx = () => ({ doc: state.edit, drawing: state.doc.drawing, container: activeSpace().entities, measure: measureText });
+
+// ---------------------------------------------------------------- editor API used by the editing tools
+const PREVIEW = '#22d3ee';
+const ed = {
+  viewer,
+  get doc() { return state.edit; },
+  get drawing() { return state.doc?.drawing; },
+  get space() { return activeSpace(); },
+  get origin() { return activeSpace()?.scene.origin ?? { x: 0, y: 0 }; },
   get selection() { return state.selection; },
+  get ortho() { return state.ortho; },
+  setSelection(ids) {
+    state.selection = ids;
+    selectionChanged();
+  },
+  snapPoint(w, from, skip) {
+    const sp = activeSpace();
+    if (!sp || !state.snap) return null;
+    return sp.pick.snap(w[0], w[1], 12 / viewer.view.scale, isHidden, { near: false, from, skip });
+  },
   pickAt(x, y, r) {
     const sp = activeSpace();
-    if (!sp) return null;
-    return sp.pick.pick(x, y, r, isHidden);
+    return sp ? sp.pick.pick(x, y, r, isHidden, isLockedItem) : null;
   },
-  select(item) {
-    state.selection = item === null || item === undefined ? [] : [item];
-    showProperties();
-    viewer.renderOverlay();
+  isLocked: isLockedItem,
+  itemsInRect(rect, crossing) {
+    const sp = activeSpace();
+    return sp ? sp.pick.inRect(rect, crossing, isHidden, isLockedItem) : [];
   },
-  drawItemsOverlay(o, v, items, color, width) {
+  selectedEntities() {
+    const sp = activeSpace();
+    return state.selection.map((id) => sp.scene.items[id]).filter((it) => it && !it.deleted && !isLockedItem(it.id)).map((it) => it.ent);
+  },
+  env() { return { doc: state.edit, drawing: state.doc.drawing, layer: state.edit.currentLayer, textStyle: state.doc.drawing.header.TEXTSTYLE }; },
+  previewEnv() { return { doc: { newHandle: () => '' }, drawing: state.doc.drawing, layer: state.edit.currentLayer }; },
+  /** Adds entities as one undo step; returns that step. */
+  add(ents, label) {
+    ops.addEntities(editCtx(), ents, label);
+    return state.edit.undoStack.at(-1);
+  },
+  undoIfLast(step) { if (state.edit.undoStack.at(-1) === step) state.edit.undo(); },
+  transformSelection(M, label) {
+    const ents = ed.selectedEntities();
+    if (!ents.length) return;
+    const skipped = ops.transformEntities(editCtx(), ents, M, label);
+    if (skipped) toast(`${skipped} ${t('transformSkipped')}`);
+  },
+  copySelection(M, label = 'Copy') {
+    const ents = ed.selectedEntities();
+    if (ents.length) ops.copyEntities(editCtx(), ents, M, label);
+  },
+  offset(ent, dist, side) { return ops.offsetOne(editCtx(), ent, dist, side); },
+  applyGrip(grip, x, y) {
+    const it = activeSpace().scene.items[grip.item];
+    if (!it || it.deleted) return;
+    // Grips belong to the entity as it was when the grip was shown: find it again by position.
+    ops.modifyEntities(editCtx(), [it.ent], (e) => {
+      const g = gripsAt(e, it, grip);
+      g?.apply(e, x, y);
+    }, 'Grip edit');
+  },
+  gripEnv(it) {
+    const o = activeSpace().scene.origin;
+    return {
+      measure: measureText,
+      center: () => (Number.isFinite(it.bb?.[0]) ? [(it.bb[0] + it.bb[2]) / 2 + o.x, (it.bb[1] + it.bb[3]) / 2 + o.y] : null),
+    };
+  },
+  drawItems(o, v, items, color, width) {
     const sp = activeSpace();
     if (!sp) return;
     v.applyTransform(o);
     sp.renderer.drawItems(o, { scale: v.view.scale }, items, color, width);
     o.setTransform(1, 0, 0, 1, 0, 0);
   },
+  /** Draws temporary entities (rubber band of the drawing tools, grip edits). */
+  drawPreview(o, v, ents) {
+    const sp = activeSpace();
+    if (!sp || !ents.length) return;
+    let scene;
+    try { scene = buildScene(state.doc.drawing, ents, { measure: measureText, origin: sp.scene.origin }); } catch { return; }
+    const r = new CadRenderer(scene);
+    v.applyTransform(o);
+    r.drawItems(o, { scale: v.view.scale }, scene.items.map((it) => it.id), PREVIEW, 1.5, false);
+    o.setTransform(1, 0, 0, 1, 0, 0);
+  },
+  /** The selection drawn through a matrix (scene coordinates): move/rotate/scale/mirror preview. */
+  drawSelectionMoved(o, v, M) {
+    const sp = activeSpace();
+    if (!sp || !state.selection.length) return;
+    v.applyTransform(o);
+    o.transform(...M);
+    const k = Math.sqrt(Math.abs(M[0] * M[3] - M[1] * M[2])) || 1;
+    sp.renderer.drawItems(o, { scale: v.view.scale * k }, state.selection, PREVIEW, 1.5, false);
+    o.setTransform(1, 0, 0, 1, 0, 0);
+  },
+  typed() { return $('#cmdInput').value; },
+  message(text) { toast(text); },
+  done() { setTool('select'); },
+  refresh() { viewer.renderOverlay(); updateCmdline(); },
+  textHeight() { return state.textHeight ?? (state.doc.drawing.header.TEXTSIZE > 0 ? state.doc.drawing.header.TEXTSIZE : 2.5); },
+  setTextHeight(h) { state.textHeight = h; },
+  lastOffset() { return state.offsetDist ?? 0; },
+  setLastOffset(d) { state.offsetDist = d; },
 };
 
-const isHidden = (layer) => state.hidden.has(layer);
-const activeSpace = () => (state.doc?.kind === 'cad' ? state.doc.spaces[state.doc.active] : null);
+/** The grip of entity `e` matching `grip` (computed for the same entity). */
+function gripsAt(e, it, grip) {
+  return gripsOf(e, ed.gripEnv(it)).find((g) => Math.abs(g.x - grip.x) < 1e-9 && Math.abs(g.y - grip.y) < 1e-9 && g.kind === grip.kind);
+}
 /** The open PDF or image (page-like documents share paging, measuring and printing). */
 const activeSheet = () => state.doc?.sheet ?? null;
 
@@ -181,6 +291,8 @@ async function openFile(file) {
   const name = file.name || 'drawing';
   const known = formatFor(name);
   if (known?.category === 'unsupported') { showUnsupported(known.hint, known.label); return false; }
+  // Opening another file replaces the drawing: unsaved edits are saved or dropped first.
+  if (!(await confirmDiscard())) return false;
   showLoading(t('loading'));
   try {
     const buffer = await file.arrayBuffer();
@@ -200,14 +312,14 @@ async function openFile(file) {
       showLoading(t('building'));
       await nextFrame();
       if (!current()) return false;
-      setCadDoc(result.drawing);
+      setCadDoc(result.drawing, file.path ?? null);
       if (result.drawing.warnings.includes('truncated')) toast(t('fileTruncated'), false, 7000);
       if (result.drawing.warnings.includes('limit')) toast(t('fileTooLarge'), false, 7000);
       if (result.drawing.warnings.includes('dwgErrors')) toast(t('dwgErrors'), false, 8000);
     } else {
       setSheetDoc(result.kind, result.sheet);
     }
-    document.title = `${name} – ProtoCAD Viewer`;
+    updateTitle();
     return true;
   } catch (err) {
     if (my !== -1 && !current()) return false;
@@ -261,7 +373,15 @@ function showUnsupported(hint, label) {
 function makeSpace(drawing, name, entities, isLayout) {
   const scene = buildScene(drawing, entities, { measure: measureText, origin: isLayout ? { x: 0, y: 0 } : undefined });
   const renderer = new CadRenderer(scene);
-  return { name, scene, renderer, pick: new PickIndex(scene), analysis: analyze(drawing, scene), isLayout };
+  const sp = { name, entities, scene, renderer, pick: new PickIndex(scene), isLayout, analysisDirty: false, cached: analyze(drawing, scene) };
+  // After edits the totals (layer counts, BOM, search index) are recomputed when next needed.
+  Object.defineProperty(sp, 'analysis', {
+    get() {
+      if (this.analysisDirty) { this.cached = analyze(drawing, this.scene, false); this.analysisDirty = false; }
+      return this.cached;
+    },
+  });
+  return sp;
 }
 
 function resetDocState() {
@@ -275,6 +395,11 @@ function resetDocState() {
   state.pdfHits = [];
   state.measures.length = 0;
   state.sheetScale = null;
+  state.edit = null;
+  state.textHeight = null;
+  state.offsetDist = null;
+  closeColorPicker();
+  $('#cmdInput').value = '';
   state.print.window = null;
   state.print.area = 'extents';
   thumbObserver?.disconnect();
@@ -289,11 +414,13 @@ function resetDocState() {
   $('#searchCount').textContent = '';
 }
 
-function setCadDoc(drawing) {
+function setCadDoc(drawing, path = null) {
   resetDocState();
   const model = makeSpace(drawing, t('model'), drawing.modelEntities, false);
   const spaces = [model, ...drawing.layouts.map((l) => ({ name: l.name, entities: l.entities, isLayout: true, lazy: true }))];
-  state.doc = { kind: 'cad', drawing, spaces, active: 0 };
+  state.doc = { kind: 'cad', drawing, spaces, active: 0, path };
+  state.edit = new EditDoc(drawing);
+  state.edit.onChange(applyChange);
   state.hidden = new Set([...drawing.layers.values()].filter((l) => !l.visible).map((l) => l.name));
   updateNeeds();
   activateSpace(0);
@@ -301,6 +428,7 @@ function setCadDoc(drawing) {
   buildInfoPanel();
   setSideTab(window.innerWidth > 860 ? 'layers' : null);
   setTool('select');
+  updateEditUi();
   if (!$('#rightbar').hidden && $('#rightTabs .active')?.dataset.rtab === 'ai') showAiIntro();
 }
 
@@ -313,6 +441,7 @@ function activateSpace(i) {
   doc.active = i;
   state.selection = [];
   state.highlights = [];
+  if (currentTool !== 'select' && !currentTool.startsWith('measure') && currentTool !== 'pan') setTool('select');
   const model = doc.spaces[0];
   viewer.setDocument({
     bbox: sp.scene.bbox,
@@ -336,6 +465,7 @@ function setSheetDoc(kind, sheet) {
   buildInfoPanel();
   setSideTab(window.innerWidth > 860 && sheet.pageCount > 1 ? 'pages' : null);
   setTool('select');
+  updateEditUi();
   if (!$('#rightbar').hidden && $('#rightTabs .active')?.dataset.rtab === 'ai') showAiIntro();
 }
 
@@ -357,10 +487,12 @@ async function gotoPage(n) {
 
 // ---------------------------------------------------------------- overlay & status
 function drawOverlay(o, v) {
+  // Tools change their step on clicks too: keep the command line's prompt current.
+  updateCmdline();
   const sp = activeSpace();
   if (sp) {
-    if (state.highlights.length) app.drawItemsOverlay(o, v, state.highlights, '#22d3ee', 3);
-    if (state.selection.length) app.drawItemsOverlay(o, v, state.selection, '#ff9f1c', 3);
+    if (state.highlights.length) ed.drawItems(o, v, state.highlights, '#22d3ee', 3);
+    if (state.selection.length) ed.drawItems(o, v, state.selection, '#ff9f1c', 3);
   }
   if (state.doc?.kind === 'pdf' && state.pdfHits.length) {
     const page = state.doc.sheet.pageNo;
@@ -403,17 +535,333 @@ function updateStatus(w) {
 }
 
 // ---------------------------------------------------------------- tools
+const EDIT_TOOLS = {
+  line: (e) => new LineTool(e),
+  polyline: (e) => new PolylineTool(e),
+  rectangle: (e) => new RectangleTool(e),
+  circle: (e) => new CircleTool(e),
+  arc: (e) => new ArcTool(e),
+  text: (e) => new TextTool(e),
+  revcloud: (e) => new RevCloudTool(e),
+  move: (e) => new MoveTool(e, false),
+  copy: (e) => new MoveTool(e, true),
+  rotate: (e) => new RotateTool(e),
+  scale: (e) => new ScaleTool(e),
+  mirror: (e) => new MirrorTool(e),
+  offset: (e) => new OffsetTool(e),
+  erase: (e) => new ImmediateTool(e, 'Erase', eraseSelection),
+  explode: (e) => new ImmediateTool(e, 'Explode', explodeSelection),
+};
+
 let currentTool = 'select';
+let lastCommand = null;
 function setTool(name) {
+  if (EDIT_TOOLS[name] && !activeSpace()) name = 'select';
   currentTool = name;
-  if (name === 'select') viewer.setTool(new SelectTool(app));
+  if (name === 'select') viewer.setTool(new SelectTool(ed));
+  else if (name === 'pan') viewer.setTool(new PanTool());
   else if (name === 'zoomWindow') viewer.setTool(new RectTool((bb) => { viewer.zoomToBox(bb, 0.02); setTool('select'); }, t('zoomWindow')));
   else if (name.startsWith('measure:')) viewer.setTool(new MeasureTool(name.slice(8), measureEnv));
+  else if (EDIT_TOOLS[name]) { lastCommand = name; viewer.setTool(EDIT_TOOLS[name](ed)); }
   for (const b of $$('[data-tool]')) {
     const tool = b.dataset.tool;
     b.classList.toggle('active', tool === name || (tool === 'measure' && name.startsWith('measure:')));
   }
   $('[data-action="zoomWindow"]').classList.toggle('active', name === 'zoomWindow');
+  updateCmdline();
+}
+
+// ---------------------------------------------------------------- editing
+/** Applies an edit to the scenes: only changed items are tessellated again (see updateScene). */
+function applyChange(c) {
+  const doc = state.doc;
+  if (doc?.kind !== 'cad') return;
+  const t0 = performance.now();
+  const active = activeSpace();
+  const boxes = [];
+  let full = false;
+  let panels = false;
+  for (const l of c.layers) {
+    panels = true;
+    if (l.kind === 'rename') {
+      for (const sp of builtSpaces()) {
+        renameLayerInScene(sp.scene, l.from, l.to);
+        sp.renderer.renameLayer(l.from, l.to);
+        // The panel shows the cached counts until the totals are recomputed: rename them now.
+        for (const st of sp.cached?.layerStats ?? []) if (st.name === l.from) st.name = l.to;
+        sp.analysisDirty = true;
+      }
+      if (state.hidden.delete(l.from)) state.hidden.add(l.to);
+      full = true;
+    } else if (l.kind === 'color') {
+      for (const sp of builtSpaces()) { recolorLayer(sp.scene, l.name, l.rgb); sp.renderer.recolor(l.name, l.rgb); }
+      full = true;
+    } else if (l.kind === 'delete') state.hidden.delete(l.name);
+  }
+  // Items that draw a changed block (dimension and table graphics, edited block contents).
+  const changedBlocks = c.blocks.size ? blocksUsing(doc.drawing, c.blocks) : null;
+  for (const sp of builtSpaces()) {
+    const rebuild = [], remove = [];
+    for (const e of c.ents) {
+      const own = state.edit.owner.get(e);
+      const has = sp.scene.itemOf.has(e);
+      if (own === sp.entities || (own === undefined && has)) rebuild.push(e);
+      else if (has) remove.push(e);
+    }
+    if (changedBlocks) {
+      for (const it of sp.scene.items) {
+        if (it.deleted) continue;
+        const e = it.ent;
+        const name = e.type === 'ACAD_TABLE' ? ops.tableBlockName(doc.drawing, e) : e.type === 'INSERT' ? e.blockName ?? e.name : e.type?.includes('DIMENSION') ? e.name : null;
+        if (name && changedBlocks.has(name) && !c.ents.has(e)) rebuild.push(e);
+      }
+    }
+    if (!rebuild.length && !remove.length) continue;
+    if (sp !== active) full = full || (!sp.isLayout && active?.isLayout);
+    for (const e of [...rebuild, ...remove]) {
+      const id = sp.scene.itemOf.get(e);
+      if (id !== undefined) boxes.push(sp.scene.items[id].bb.slice());
+      if (e.type === 'XLINE' || e.type === 'RAY') full = true;
+    }
+    const r = updateScene(sp.scene, { rebuild, remove });
+    sp.renderer.update(r);
+    sp.pick.update(r);
+    for (const id of r.items) {
+      const it = sp.scene.items[id];
+      annotateItem(sp.scene, it);
+      if (!it.deleted && sp === active) boxes.push(it.bb);
+    }
+    sp.analysisDirty = true;
+    panels = true;
+    if (deadRatio(sp.scene) > 0.3 && sp.scene.prims.length > 20000) scheduleCompaction(sp);
+  }
+  if (active) state.selection = state.selection.filter((id) => !active.scene.items[id]?.deleted);
+  if (full) viewer.render(true);
+  else viewer.renderRegion(boxes);
+  state.lastEdit = { ms: performance.now() - t0, at: t0 };
+  if (panels) schedulePanels(c.layers.length > 0);
+  updateEditUi();
+  if (state.selection.length || c.layers.length) showProperties();
+  updateCmdline();
+}
+
+/** Names of the changed blocks and of every block that (indirectly) inserts one of them. */
+function blocksUsing(drawing, names) {
+  const out = new Set(names);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const b of drawing.blocks.values()) {
+      if (out.has(b.name)) continue;
+      if (b.entities.some((e) => (e.type === 'INSERT' && out.has(e.blockName ?? e.name)) || (e.type?.includes('DIMENSION') && out.has(e.name)))) { out.add(b.name); grew = true; }
+    }
+  }
+  return out;
+}
+
+let compactTimer = 0;
+/** Drops dead primitives once many accumulated (off the critical path; item ids stay). */
+function scheduleCompaction(sp) {
+  clearTimeout(compactTimer);
+  compactTimer = setTimeout(() => {
+    if (!state.doc?.spaces?.includes(sp)) return;
+    compactScene(sp.scene);
+    sp.renderer = new CadRenderer(sp.scene);
+    sp.pick = new PickIndex(sp.scene);
+    viewer.render(true);
+  }, 1500);
+}
+
+let panelTimer = 0;
+/** Layer counts, block list and info follow an edit shortly after (they need the totals). */
+function schedulePanels(layersNow) {
+  if (layersNow) buildLayerPanel(true);
+  clearTimeout(panelTimer);
+  panelTimer = setTimeout(() => {
+    if (state.doc?.kind !== 'cad') return;
+    buildLayerPanel();
+    buildBlockPanel();
+    buildInfoPanel();
+    if ($('#searchInput').value.trim()) runSearch();
+  }, 350);
+}
+
+function selectionChanged() {
+  showProperties();
+  viewer.renderOverlay();
+  updateSelectionStatus();
+  updateCmdline();
+}
+
+function updateSelectionStatus() {
+  const n = state.selection.length;
+  const el = $('#selCount');
+  el.hidden = !n;
+  el.textContent = n ? `${n.toLocaleString('en-US')} ${t('selected')}` : '';
+}
+
+/** Title (with * when modified), undo/redo buttons, edit bar, current layer, snap/ortho toggles. */
+function updateEditUi() {
+  updateTitle();
+  const e = state.edit;
+  const ub = $('#undoBtn'), rb = $('#redoBtn');
+  ub.disabled = !e?.canUndo;
+  rb.disabled = !e?.canRedo;
+  ub.title = e?.canUndo ? `${t('undo')}: ${e.undoLabel}` : t('undo');
+  rb.title = e?.canRedo ? `${t('redo')}: ${e.redoLabel}` : t('redo');
+  $('#editbar').hidden = state.doc?.kind !== 'cad' || !state.editbar;
+  $('#editToggle').classList.toggle('active', state.editbar);
+  $('#snapBtn').classList.toggle('on', state.snap);
+  $('#orthoBtn').classList.toggle('on', state.ortho);
+  $('#snapToggle').checked = state.snap;
+  const sel = $('#curLayer');
+  if (state.doc?.kind === 'cad') {
+    const cur = e.currentLayer;
+    const names = [...state.doc.drawing.layers.keys()].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    const key = names.join('\n') + '|' + cur;
+    if (sel.dataset.key !== key) {
+      sel.innerHTML = names.map((n) => `<option ${n === cur ? 'selected' : ''}>${escapeHtml(n)}</option>`).join('');
+      sel.dataset.key = key;
+    }
+  }
+  updateSelectionStatus();
+}
+
+function updateTitle() {
+  const doc = state.doc;
+  const name = doc?.kind === 'cad' ? doc.drawing.fileName : doc?.sheet?.fileName;
+  const modified = !!state.edit?.modified;
+  document.title = name ? `${modified ? '*' : ''}${name} – ProtoCAD Viewer` : 'ProtoCAD Viewer';
+  platform.setModified(modified);
+}
+
+function eraseSelection() {
+  const ents = ed.selectedEntities();
+  if (!ents.length) { toast(t('selectFirst')); return; }
+  state.selection = [];
+  ops.eraseEntities(editCtx(), ents);
+}
+
+function explodeSelection() {
+  const ents = ed.selectedEntities();
+  if (!ents.length) { toast(t('selectFirst')); return; }
+  const { created, skipped } = ops.explodeEntities(editCtx(), ents);
+  if (!created.length) { toast(t('explodeNone')); return; }
+  const sp = activeSpace();
+  state.selection = created.map((e) => sp.scene.itemOf.get(e)).filter((id) => id !== undefined);
+  selectionChanged();
+  if (skipped) toast(`${skipped} of ${ents.length} objects could not be exploded.`);
+}
+
+function selectAll() {
+  const sp = activeSpace();
+  if (!sp) return;
+  state.selection = sp.scene.items.filter((it) => !it.deleted && it.last > it.first && !isHidden(it.layer) && !isLockedItem(it.id)).map((it) => it.id);
+  selectionChanged();
+}
+
+function undo() {
+  if (!state.edit) return;
+  // Inside a command, Ctrl+Z first takes back the last point.
+  if (viewer.tool?.undoPoint?.()) { viewer.renderOverlay(); updateCmdline(); return; }
+  const label = state.edit.undo();
+  toast(label ? `${t('undone')}: ${label}` : t('nothingToUndo'), false, 1600);
+}
+
+function redo() {
+  if (!state.edit) return;
+  const label = state.edit.redo();
+  toast(label ? `${t('redone')}: ${label}` : t('nothingToRedo'), false, 1600);
+}
+
+function setOrtho(on) {
+  state.ortho = on;
+  saveUiPrefs();
+  updateEditUi();
+  viewer.renderOverlay();
+}
+
+function setSnap(on) {
+  state.snap = on;
+  saveUiPrefs();
+  updateEditUi();
+  viewer.renderOverlay();
+}
+
+// ---------------------------------------------------------------- command line
+/** Shows the active command's prompt; the input takes typed coordinates, values and command aliases. */
+function updateCmdline(typing = false) {
+  const bar = $('#cmdbar');
+  const prompt = viewer.tool?.prompt || '';
+  const input = $('#cmdInput');
+  const show = state.doc?.kind === 'cad' && (!!prompt || typing || document.activeElement === input || !!input.value);
+  if (bar.hidden === show) bar.hidden = !show;
+  const text = prompt || 'Command:';
+  if ($('#cmdPrompt').textContent !== text) { $('#cmdPrompt').textContent = text; bar.classList.remove('bad'); }
+}
+
+function submitCommand(text) {
+  const input = $('#cmdInput');
+  const tool = viewer.tool;
+  if (tool?.prompt && tool.input) {
+    let accepted = false;
+    try {
+      accepted = tool.input(text);
+    } catch (err) {
+      console.error(err);
+      toast(`${t('invalidInput')}: ${err.message}`, true, 4000);
+      input.value = '';
+      setTool('select');
+      return;
+    }
+    if (!accepted) {
+      $('#cmdbar').classList.add('bad');
+      toast(`${t('invalidInput')}: ${text}`, true, 2500);
+      return;
+    }
+    input.value = '';
+  } else {
+    input.value = '';
+    const word = text.trim().toUpperCase();
+    const cmd = word ? ALIASES[word] : lastCommand;
+    if (!cmd) { if (word) toast(`${t('unknownCommand')}: ${text.trim()}`, true, 2500); }
+    else runCommand(cmd);
+  }
+  viewer.renderOverlay();
+  updateCmdline();
+  // Keep typing into the line while a command waits for text; otherwise the drawing gets the keys back.
+  if (!(viewer.tool?.prompt && viewer.tool.inputKind === 'text')) input.blur();
+}
+
+function runCommand(cmd) {
+  if (state.doc?.kind !== 'cad') return;
+  if (cmd === 'undo') undo();
+  else if (cmd === 'redo') redo();
+  else if (EDIT_TOOLS[cmd]) setTool(cmd);
+}
+
+$('#cmdInput').addEventListener('keydown', (ev) => {
+  const input = ev.currentTarget;
+  if (ev.key === 'Enter' || (ev.key === ' ' && viewer.tool?.inputKind !== 'text' && input.value.trim())) {
+    ev.preventDefault();
+    submitCommand(input.value);
+  } else if (ev.key === 'Escape') {
+    ev.preventDefault();
+    ev.stopPropagation();
+    if (input.value) { input.value = ''; viewer.renderOverlay(); return; }
+    input.blur();
+    cancelCommand();
+  }
+});
+$('#cmdInput').addEventListener('input', () => { $('#cmdbar').classList.remove('bad'); viewer.renderOverlay(); });
+$('#cmdInput').addEventListener('blur', () => setTimeout(() => updateCmdline(), 0));
+$('#cmdInput').addEventListener('focus', () => updateCmdline(true));
+
+/** Esc: the tool takes back its step, or the command ends (and the selection clears in Select). */
+function cancelCommand() {
+  if (viewer.tool?.key?.({ key: 'Escape' })) { viewer.renderOverlay(); updateCmdline(); return; }
+  if (currentTool !== 'select') setTool('select');
+  else if (state.selection.length || state.highlights.length) { state.selection = []; state.highlights = []; selectionChanged(); }
 }
 
 function zoomToItems(ids, pad = 0.35) {
@@ -449,13 +897,21 @@ function setSideTab(name, focus = false) {
   if (name === 'search' && focus) setTimeout(() => $('#searchInput').focus(), 0);
 }
 
-function buildLayerPanel() {
+/**
+ * Layers: visibility (eye, click the row; double-click isolates), lock, colour, current layer
+ * (bold with a check), and a row menu to make current, rename, recolour, lock or delete.
+ * `stale` reuses the last counts (they are recomputed shortly after an edit).
+ */
+function buildLayerPanel(stale = false) {
   const ul = $('#layerList');
   const doc = state.doc;
   if (doc?.kind !== 'cad') { ul.innerHTML = ''; return; }
-  const counts = new Map(doc.spaces[0].analysis.layerStats.map((s) => [s.name, s]));
+  const sp0 = doc.spaces[0];
+  const analysis = stale && sp0.analysisDirty ? sp0.cached : sp0.analysis;
+  const counts = new Map(analysis.layerStats.map((s) => [s.name, s]));
   const filter = $('#layerFilter').value.trim().toLowerCase();
   const theme = { ...THEMES.dark };
+  const current = state.edit?.currentLayer;
   const layers = [...doc.drawing.layers.values()].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
   ul.innerHTML = '';
   for (const l of layers) {
@@ -464,23 +920,108 @@ function buildLayerPanel() {
     const li = document.createElement('li');
     const on = !state.hidden.has(l.name);
     li.classList.toggle('off', !on);
-    li.innerHTML = `<button class="eye ${on ? 'on' : ''}">${icon(on ? 'eye' : 'eyeOff')}</button>
-      <span class="swatch" style="background:${colorCss(l.rgb, theme)}"></span>
+    li.classList.toggle('current', l.name === current);
+    li.dataset.layer = l.name;
+    li.innerHTML = `<button class="eye ${on ? 'on' : ''}" type="button">${icon(on ? 'eye' : 'eyeOff')}</button>
+      <button class="row-btn lock ${l.locked ? 'on' : ''}" type="button" title="${escapeHtml(l.locked ? t('layerUnlock') : t('layerLock'))}">${icon(l.locked ? 'lock' : 'unlock')}</button>
+      <button class="swatch" type="button" title="${escapeHtml(t('layerColor'))}" style="background:${colorCss(l.rgb, theme)}"></button>
       <span class="name" title="${escapeHtml(l.name)}">${escapeHtml(l.name)}</span>
-      <span class="count">${s ? s.entities : 0}</span>`;
-    li.title = s?.length ? `${t('length')}: ${formatLength(s.length, UNIT_NAMES[doc.drawing.units])}` : '';
-    li.addEventListener('click', () => {
+      ${l.name === current ? `<span class="cur-mark" title="${escapeHtml(t('layerCurrent'))}">${icon('check')}</span>` : ''}
+      <span class="count">${s ? s.entities : 0}</span>
+      <button class="row-btn more" type="button" title="${escapeHtml(t('layerRename'))}…">${icon('more')}</button>`;
+    li.title = [s?.length ? `${t('length')}: ${formatLength(s.length, UNIT_NAMES[doc.drawing.units])}` : '', l.locked ? t('layerLocked') : ''].filter(Boolean).join('\n');
+    li.addEventListener('click', (ev) => {
+      if (ev.target.closest('.lock')) { layerOp(() => state.edit.setLayerLock(l.name, !l.locked)); return; }
+      if (ev.target.closest('.swatch')) { pickLayerColor(ev.target.closest('.swatch'), l); return; }
+      // The page-wide click handler closes menus: this click opens one.
+      if (ev.target.closest('.more')) { ev.stopPropagation(); openLayerMenu(ev.target.closest('.more'), l); return; }
+      if (ev.target.closest('.rename')) return;
       if (state.hidden.has(l.name)) state.hidden.delete(l.name);
       else state.hidden.add(l.name);
       layersChanged();
     });
     li.addEventListener('dblclick', (ev) => {
+      if (ev.target.closest('button, .rename')) return;
       ev.preventDefault();
       state.hidden = new Set([...doc.drawing.layers.keys()].filter((n) => n !== l.name));
       layersChanged();
     });
     ul.append(li);
   }
+}
+
+/** Runs a layer edit, reporting why it was refused (name taken, layer not empty...). */
+function layerOp(fn) {
+  try { fn(); } catch (err) { toast(err.message, true, 5000); }
+}
+
+function pickLayerColor(anchor, l) {
+  openColorPicker(anchor, {
+    value: { colorIndex: l.aci, color: l.trueColor ?? undefined }, allowBy: false, title: `${t('layer')} ${l.name}`,
+    onPick: (v) => layerOp(() => state.edit.setLayerColor(l.name, v.colorIndex === 256 ? l.aci : v.colorIndex, typeof v.color === 'number' ? v.color : null)),
+  });
+}
+
+function openLayerMenu(anchor, l) {
+  closeMenus();
+  const menu = $('#layerMenu');
+  menu.innerHTML = `<button data-op="current">${icon('check')}<span>${t('layerSetCurrent')}</span></button>
+    <button data-op="rename">${icon('edit')}<span>${t('layerRename')}</span></button>
+    <button data-op="color">${icon('sparkle')}<span>${t('layerColor')}</span></button>
+    <button data-op="lock">${icon(l.locked ? 'unlock' : 'lock')}<span>${l.locked ? t('layerUnlock') : t('layerLock')}</span></button>
+    <hr /><button data-op="delete">${icon('trash')}<span>${t('layerDelete')}</span></button>`;
+  menu.hidden = false;
+  const r = anchor.getBoundingClientRect();
+  menu.style.top = `${Math.min(r.bottom + 4, window.innerHeight - menu.offsetHeight - 8)}px`;
+  menu.style.left = `${Math.max(8, Math.min(r.left - menu.offsetWidth + r.width, window.innerWidth - menu.offsetWidth - 8))}px`;
+  menu.onclick = (ev) => {
+    const op = ev.target.closest('[data-op]')?.dataset.op;
+    if (!op) return;
+    menu.hidden = true;
+    if (op === 'current') layerOp(() => state.edit.setCurrentLayer(l.name));
+    else if (op === 'rename') startRename(l.name);
+    else if (op === 'color') pickLayerColor(anchor, l);
+    else if (op === 'lock') layerOp(() => state.edit.setLayerLock(l.name, !l.locked));
+    else if (op === 'delete') layerOp(() => state.edit.deleteLayer(l.name));
+  };
+}
+
+/** Inline rename in the layer list (Enter applies, Esc cancels). */
+function startRename(name) {
+  const li = [...$$('#layerList li')].find((x) => x.dataset.layer === name);
+  if (!li) return;
+  const span = li.querySelector('.name');
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'rename';
+  input.value = name;
+  input.dir = 'auto';
+  span.replaceWith(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = (apply) => {
+    if (done) return;
+    done = true;
+    if (apply && input.value.trim() && input.value.trim() !== name) layerOp(() => state.edit.renameLayer(name, input.value));
+    buildLayerPanel(true);
+  };
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); finish(true); }
+    if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); finish(false); }
+  });
+  input.addEventListener('blur', () => finish(true));
+}
+
+function newLayer() {
+  if (!state.edit) return;
+  let n = 1;
+  while ([...state.doc.drawing.layers.keys()].some((k) => k.toLowerCase() === `${t('newLayerName')}${n}`.toLowerCase())) n++;
+  const name = `${t('newLayerName')}${n}`;
+  layerOp(() => state.edit.newLayer(name));
+  $('#layerFilter').value = '';
+  buildLayerPanel(true);
+  startRename(name);
 }
 
 function layersChanged() {
@@ -524,7 +1065,7 @@ function buildInfoPanel() {
     rows.push([t('file'), d.fileName], [t('format'), `${d.source.toUpperCase()} ${d.version || ''}`], [t('units'), unit],
       [t('extents'), `(${formatNum(x0 + o.x)}, ${formatNum(y0 + o.y)}) – (${formatNum(x1 + o.x)}, ${formatNum(y1 + o.y)})`],
       [t('size'), `${formatNum(x1 - x0)} × ${formatNum(y1 - y0)} ${unit === '-' ? '' : unit}`],
-      [t('entities'), String(sp.scene.items.length)], [t('layers'), String(d.layers.size)],
+      [t('entities'), String(liveItemCount(sp.scene))], [t('layers'), String(d.layers.size)],
       // DGN cells are stored as anonymous blocks, so count the cell names in use instead.
       [t('blocks'), String(d.source === 'dgn' ? sp.analysis.blocks.length : [...d.blocks.keys()].filter((n) => !n.startsWith('*')).length)],
       ['Layouts', d.layouts.map((l) => l.name).join(', ') || '-']);
@@ -640,7 +1181,7 @@ async function runSearch() {
         li.innerHTML = `<span class="name"><bdi>${escapeHtml(r.text)}</bdi><span class="sub">${escapeHtml(it.layer)} · ${escapeHtml(it.type)}</span></span>`;
         li.addEventListener('click', () => {
           state.selection = [r.item];
-          showProperties();
+          selectionChanged();
           zoomToItems([r.item]);
           closeSidebarOnMobile();
         });
@@ -680,52 +1221,46 @@ function closeSidebarOnMobile() {
 function showProperties() {
   const dl = $('#propList');
   const sp = activeSpace();
-  const id = state.selection[0];
+  const items = sp ? state.selection.map((id) => sp.scene.items[id]).filter((it) => it && !it.deleted) : [];
   // On phones the panel is a drawer: a button offers it while something is selected.
-  $('#propsFab').hidden = !sp || id === undefined;
-  if (!sp || id === undefined) {
+  $('#propsFab').hidden = !items.length;
+  if (!items.length) {
     dl.innerHTML = `<div class="empty">${t('nothingSelected')}</div>`;
     return;
   }
-  const it = sp.scene.items[id];
+  if (dl.contains(document.activeElement) && document.activeElement.matches('input, textarea')) {
+    // Do not replace a field the user is typing in; it refreshes on commit.
+    if (dl.dataset.sel === state.selection.join(',')) return;
+  }
+  dl.dataset.sel = state.selection.join(',');
+  const it = items[0];
   const e = it.ent;
   const unit = UNIT_NAMES[state.doc.drawing.units] || '';
-  const pt = (p) => (p ? `${formatNum(p.x, 3)}, ${formatNum(p.y, 3)}` : '');
-  const rows = [[t('type'), e.type], [t('layer'), it.layer]];
-  const firstPrim = sp.scene.prims[it.first];
-  if (firstPrim) {
-    const swatch = `<span style="display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:middle;background:${colorCss(firstPrim.rgb, THEMES.dark)}"></span> `;
-    rows.push([t('color'), { html: swatch + escapeHtml(colorName(e)) }]);
+  const ro = [];
+  if (items.length === 1) {
+    if (e.handle) ro.push([t('handle'), e.handle]);
+    if (it.text && e.type !== 'TEXT' && e.type !== 'MTEXT') ro.push([t('text'), it.text]);
+    if (e.type?.includes('DIMENSION') && Number.isFinite(e.measurement)) ro.push(['Value', formatNum(e.measurement, 3)]);
+    if (it.length) ro.push([t('length'), formatLength(it.length, unit)]);
+    const closed = sp.scene.prims.slice(it.first, it.last).find((p) => p.k === STROKE && p.closed);
+    if (closed && ['LWPOLYLINE', 'POLYLINE2D', 'CIRCLE', 'ELLIPSE'].includes(e.type)) ro.push([t('area'), formatArea(Math.abs(polygonArea(closed.pts)), unit)]);
+    if (e.type === 'LINE') ro.push(['Angle', `${(((Math.atan2(e.endPoint.y - e.startPoint.y, e.endPoint.x - e.startPoint.x) * 180) / Math.PI + 360) % 360).toFixed(2)}°`]);
+  } else {
+    const len = items.reduce((n, x) => n + (x.length || 0), 0);
+    if (len) ro.push([t('length'), formatLength(len, unit)]);
   }
-  if (e.handle) rows.push([t('handle'), e.handle]);
-  if (e.type === 'INSERT') {
-    rows.push([t('block'), e.name]);
-    rows.push([t('position'), pt(e.insertionPoint)]);
-    if (e.rotation) rows.push(['∠', `${((e.rotation * 180) / Math.PI).toFixed(2)}°`]);
-    if ((e.xScale ?? 1) !== 1 || (e.yScale ?? 1) !== 1) rows.push(['Scale', `${formatNum(e.xScale ?? 1, 3)} × ${formatNum(e.yScale ?? 1, 3)}`]);
-  }
-  if (it.text) rows.push([t('text'), it.text]);
-  if (e.type?.includes('DIMENSION') && Number.isFinite(e.measurement)) rows.push(['Value', formatNum(e.measurement, 3)]);
-  if (e.radius) rows.push(['R', `${formatNum(e.radius, 3)} ${unit}`], ['Ø', `${formatNum(e.radius * 2, 3)} ${unit}`]);
-  if (e.center) rows.push(['Center', pt(e.center)]);
-  if (e.startPoint && e.type === 'LINE') rows.push(['Start', pt(e.startPoint)], ['End', pt(e.endPoint)]);
-  if (it.length) rows.push([t('length'), formatLength(it.length, unit)]);
-  const closed = sp.scene.prims.slice(it.first, it.last).find((p) => p.k === STROKE && p.closed);
-  if (closed && ['LWPOLYLINE', 'POLYLINE2D', 'CIRCLE', 'ELLIPSE'].includes(e.type)) rows.push([t('area'), formatArea(Math.abs(polygonArea(closed.pts)), unit)]);
-  if (it.bb && Number.isFinite(it.bb[0])) rows.push([t('size'), `${formatNum(it.bb[2] - it.bb[0])} × ${formatNum(it.bb[3] - it.bb[1])} ${unit}`]);
-  let html = rows.map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd dir="auto">${v?.html ?? escapeHtml(String(v))}</dd>`).join('');
-  if (it.attribs?.length) {
-    html += `<div class="section">${t('attributes')}</div>`;
-    html += it.attribs.map((a) => `<dt>${escapeHtml(a.tag)}</dt><dd dir="auto">${escapeHtml(a.value)}</dd>`).join('');
-  }
-  dl.innerHTML = html;
+  const bb = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const x of items) if (Number.isFinite(x.bb?.[0])) { bb[0] = Math.min(bb[0], x.bb[0]); bb[1] = Math.min(bb[1], x.bb[1]); bb[2] = Math.max(bb[2], x.bb[2]); bb[3] = Math.max(bb[3], x.bb[3]); }
+  if (Number.isFinite(bb[0])) ro.push([t('size'), `${formatNum(bb[2] - bb[0])} × ${formatNum(bb[3] - bb[1])} ${unit}`]);
+  renderPropsEditor(dl, {
+    items, drawing: state.doc.drawing, theme: THEMES.dark, readonly: ro,
+    locked: items.some((x) => isLockedItem(x.id)),
+    firstRgb: sp.scene.prims[it.first]?.rgb,
+    modify: (label, fn) => ops.modifyEntities(editCtx(), items.map((x) => x.ent), fn, label),
+    pickColor: (anchor, ent, cb) => openColorPicker(anchor, { value: { colorIndex: ent.colorIndex, color: ent.color }, allowBy: true, onPick: cb }),
+    toast,
+  });
   if (window.innerWidth > 860 && $('#rightbar').hidden) openRight('props');
-}
-
-function colorName(e) {
-  if (typeof e.color === 'number') return `RGB ${(e.color >> 16) & 255},${(e.color >> 8) & 255},${e.color & 255}`;
-  const ci = e.colorIndex ?? 256;
-  return ci === 256 ? 'ByLayer' : ci === 0 ? 'ByBlock' : `ACI ${ci}`;
 }
 
 function openRight(tab) {
@@ -746,7 +1281,7 @@ const assistant = new Assistant({
     const doc = state.doc;
     if (doc.kind === 'cad') {
       const sp = activeSpace();
-      return { key: `${doc.drawing.fileName}|${sp.name}|${sp.scene.items.length}`, title: doc.drawing.fileName, text: drawingSummary(doc.drawing, sp.scene, sp.analysis, sp.name) };
+      return { key: `${doc.drawing.fileName}|${sp.name}|v${state.edit?.version ?? 0}`, title: doc.drawing.fileName, text: drawingSummary(doc.drawing, sp.scene, sp.analysis, sp.name) };
     }
     const sheet = doc.sheet;
     if (doc.kind === 'image') {
@@ -804,7 +1339,7 @@ const assistant = new Assistant({
         viewer.zoomExtents();
         return { page: doc.sheet.pageNo };
       }
-      const ids = (item_ids || []).filter((i) => activeSpace().scene.items[i]);
+      const ids = (item_ids || []).filter((i) => activeSpace().scene.items[i] && !activeSpace().scene.items[i].deleted);
       state.highlights = ids;
       zoomToItems(ids);
       return { zoomed_to: ids.length };
@@ -830,7 +1365,7 @@ const assistant = new Assistant({
       const o = sp.scene.origin;
       return item_ids.slice(0, 50).map((id) => {
         const it = sp.scene.items[id];
-        if (!it) return { id, error: 'not found' };
+        if (!it || it.deleted) return { id, error: 'not found (it may have been erased)' };
         return {
           id, type: it.type, layer: it.layer, block: it.name, attributes: it.attribs, text: it.text,
           length: it.length ? +it.length.toFixed(3) : undefined,
@@ -905,7 +1440,7 @@ async function sendAi(text, includeView) {
     frame = 0;
     bot.innerHTML = md.trim() ? renderMarkdown(md) : stopped ? '' : `<span class="thinking">${t('aiThinking')}</span>`;
     // References to items that do not exist in this drawing stay plain text.
-    for (const r of bot.querySelectorAll('.ref')) if (!activeSpace()?.scene.items[+r.dataset.item]) r.replaceWith(r.textContent);
+    for (const r of bot.querySelectorAll('.ref')) { const it = activeSpace()?.scene.items[+r.dataset.item]; if (!it || it.deleted) r.replaceWith(r.textContent); }
     if (stopped) bot.insertAdjacentHTML('beforeend', `<div class="muted small">${t('aiStopped')}</div>`);
     log.scrollTop = log.scrollHeight;
   };
@@ -937,9 +1472,10 @@ $('#aiLog').addEventListener('click', (ev) => {
   const ref = ev.target.closest('.ref');
   if (!ref) return;
   const id = Number(ref.dataset.item);
-  if (activeSpace()?.scene.items[id]) {
+  const it = activeSpace()?.scene.items[id];
+  if (it && !it.deleted) {
     state.selection = [id];
-    showProperties();
+    selectionChanged();
     zoomToItems([id]);
   }
 });
@@ -1188,7 +1724,14 @@ function onAction(action, el) {
     case 'zoomWindow': setTool(currentTool === 'zoomWindow' ? 'select' : 'zoomWindow'); break;
     case 'zoomIn': viewer.zoomAt(1.5); break;
     case 'zoomOut': viewer.zoomAt(1 / 1.5); break;
-    case 'select': setTool('select'); state.selection = []; showProperties(); break;
+    case 'select': setTool('select'); state.selection = []; selectionChanged(); break;
+    case 'pan': setTool(currentTool === 'pan' ? 'select' : 'pan'); break;
+    case 'toggleEditbar': state.editbar = !state.editbar; saveUiPrefs(); updateEditUi(); break;
+    case 'undo': undo(); break;
+    case 'redo': redo(); break;
+    case 'save': saveDrawing(false); break;
+    case 'saveAs': saveDrawing(true); break;
+    case 'layerNew': newLayer(); break;
     case 'measureMenu': toggleMenu(el); break;
     case 'measure:clear': state.measures.length = 0; viewer.renderOverlay(); closeMenus(); break;
     case 'print': openPrint(); break;
@@ -1214,6 +1757,7 @@ function onAction(action, el) {
     case 'toggleSidebar': $('#sidebar').classList.toggle('open'); break;
     default:
       if (action.startsWith('measure:')) { setTool(action); closeMenus(); }
+      else if (action.startsWith('cmd:')) runCommand(action.slice(4));
   }
 }
 
@@ -1227,6 +1771,10 @@ document.addEventListener('click', (ev) => {
   if (!ev.target.closest('.menu')) closeMenus();
 });
 
+$('#snapBtn').addEventListener('click', () => setSnap(!state.snap));
+$('#orthoBtn').addEventListener('click', () => setOrtho(!state.ortho));
+$('#curLayer').addEventListener('change', (ev) => { layerOp(() => state.edit?.setCurrentLayer(ev.target.value)); ev.target.blur(); });
+
 function toggleMenu(btn) {
   const menu = $('#measureMenu');
   const open = menu.hidden;
@@ -1237,7 +1785,7 @@ function toggleMenu(btn) {
   menu.style.top = `${r.bottom + 4}px`;
   menu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8))}px`;
 }
-function closeMenus() { $('#measureMenu').hidden = true; }
+function closeMenus() { $('#measureMenu').hidden = true; $('#layerMenu').hidden = true; }
 
 // On small screens the drawers close when the drawing is touched.
 $('#viewport').addEventListener('pointerdown', () => {
@@ -1250,7 +1798,7 @@ function closeRight() {
   document.body.classList.remove('right-open');
 }
 
-$('#snapToggle').addEventListener('change', (ev) => { state.snap = ev.target.checked; });
+$('#snapToggle').addEventListener('change', (ev) => setSnap(ev.target.checked));
 $('#layerFilter').addEventListener('input', buildLayerPanel);
 $('#searchInput').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 220); });
 $('#fileInput').addEventListener('change', (ev) => {
@@ -1259,14 +1807,20 @@ $('#fileInput').addEventListener('change', (ev) => {
   if (f) openFile(f);
 });
 
+/** Printable keys that start typing into the command line. */
+const TYPABLE = /^[\w@.,<>+\-#%:/\\* ]$/;
+
 document.addEventListener('keydown', (ev) => {
   // An open menu closes first, even when its Snap checkbox has the focus.
-  if (ev.key === 'Escape' && !$('#measureMenu').hidden) {
+  if (ev.key === 'Escape' && (!$('#measureMenu').hidden || !$('#layerMenu').hidden)) {
     closeMenus();
     if (ev.target.closest('.menu')) ev.target.blur();
     ev.preventDefault();
     return;
   }
+  const cad = state.doc?.kind === 'cad';
+  const inField = !!ev.target.closest('input, textarea, select');
+  const cmdLine = ev.target.id === 'cmdInput';
   // Ctrl/Cmd shortcuts work everywhere except inside dialogs, and before the single-key ones.
   const mod = ev.ctrlKey || ev.metaKey;
   if (mod && !ev.altKey && !ev.target.closest('dialog')) {
@@ -1274,22 +1828,157 @@ document.addEventListener('keydown', (ev) => {
     if (k === 'o') { ev.preventDefault(); chooseFile(); return; }
     if (k === 'p' && state.doc) { ev.preventDefault(); openPrint(); return; }
     if (k === 'f' && state.doc) { ev.preventDefault(); setSideTab('search', true); $('#sidebar').classList.add('open'); return; }
+    if (k === 's' && cad) { ev.preventDefault(); saveDrawing(ev.shiftKey); return; }
+    // Text fields keep their own undo and select-all (the empty command line does not).
+    if (cad && (!inField || (cmdLine && !ev.target.value))) {
+      if (k === 'z' && !ev.shiftKey) { ev.preventDefault(); undo(); return; }
+      if (k === 'y' || (k === 'z' && ev.shiftKey)) { ev.preventDefault(); redo(); return; }
+      if (k === 'a' && !inField) { ev.preventDefault(); selectAll(); return; }
+    }
   }
-  if (mod || ev.altKey || ev.target.closest('input, textarea, select, dialog')) return;
-  if (viewer.tool?.key?.(ev)) { viewer.renderOverlay(); ev.preventDefault(); return; }
+  if (cad && ev.key === 'F8') { ev.preventDefault(); setOrtho(!state.ortho); return; }
+  if (cad && ev.key === 'F3') { ev.preventDefault(); setSnap(!state.snap); return; }
+  if (mod || ev.altKey || inField || ev.target.closest('dialog')) return;
+  if (cad && ev.key === ' ' && !$('#cmdInput').value) {
+    // Space held down: left-drag pans (released on keyup).
+    ev.preventDefault();
+    if (!ev.repeat) viewer.setPanKey(true);
+    return;
+  }
+  if (viewer.tool?.key?.(ev)) { viewer.renderOverlay(); updateCmdline(); ev.preventDefault(); return; }
+  if (cad && ev.key === 'Enter' && currentTool === 'select' && lastCommand) {
+    // Enter repeats the last command, as in AutoCAD.
+    ev.preventDefault();
+    runCommand(lastCommand);
+    return;
+  }
+  if (cad && (ev.key === 'Delete' || (ev.key === 'Backspace' && currentTool === 'select')) && state.selection.length) {
+    ev.preventDefault();
+    eraseSelection();
+    return;
+  }
+  // Typing goes to the command line: values while a command waits, command aliases (L, PL, M...) otherwise.
+  if (cad && ev.key.length === 1 && TYPABLE.test(ev.key) && ev.key !== ' ') {
+    const waiting = !!viewer.tool?.prompt;
+    const alias = currentTool === 'select' && /^[a-z]$/i.test(ev.key) && !/^f$/i.test(ev.key);
+    if (waiting || alias) {
+      ev.preventDefault();
+      const input = $('#cmdInput');
+      input.value += ev.key;
+      updateCmdline(true);
+      input.focus();
+      viewer.renderOverlay();
+      return;
+    }
+  }
   if (ev.key === 'Escape') {
     // Esc with no measurement in progress leaves the tool.
     if (currentTool !== 'select') setTool('select');
     closeMenus();
     state.selection = [];
     state.highlights = [];
-    showProperties();
-    viewer.renderOverlay();
+    selectionChanged();
   } else if ((ev.key === 'f' || ev.key === 'F' || ev.key === 'Home') && state.doc) viewer.zoomExtents();
   else if ((ev.key === '+' || ev.key === '=') && state.doc) viewer.zoomAt(1.5);
   else if (ev.key === '-' && state.doc) viewer.zoomAt(1 / 1.5);
   else if (ev.key === 'PageDown' && activeSheet()) gotoPage(activeSheet().pageNo + 1);
   else if (ev.key === 'PageUp' && activeSheet()) gotoPage(activeSheet().pageNo - 1);
+});
+document.addEventListener('keyup', (ev) => { if (ev.key === ' ') viewer.setPanKey(false); });
+window.addEventListener('blur', () => viewer.setPanKey(false));
+
+// ---------------------------------------------------------------- saving
+const dxfFilters = () => [{ name: t('dxfFile'), extensions: ['dxf'] }];
+let saving = null;
+
+/**
+ * Saves the drawing as DXF (AutoCAD 2013). Ctrl+S writes back to the DXF it came from (desktop);
+ * anything else (web, DWG/DGN/HP-GL sources, Save As) asks where to save / downloads.
+ * Resolves to true when saved.
+ */
+function saveDrawing(saveAs) {
+  if (state.doc?.kind !== 'cad') return Promise.resolve(false);
+  // Native menu accelerators and the page may both report Ctrl+S: one save at a time.
+  saving ??= doSave(saveAs).finally(() => { saving = null; });
+  return saving;
+}
+
+async function doSave(saveAs) {
+  const doc = state.doc;
+  const d = doc.drawing;
+  let text, report;
+  try {
+    const sp = doc.spaces[0];
+    const o = sp.scene.origin, bb = sp.scene.bbox;
+    ({ text, report } = writeDxf(d, { extents: [bb[0] + o.x, bb[1] + o.y, bb[2] + o.x, bb[3] + o.y], handleSeed: state.edit.nextHandle }));
+  } catch (err) {
+    console.error(err);
+    toast(`${t('saveFailed')}: ${err.message}`, true, 7000);
+    return false;
+  }
+  const blob = new Blob([text], { type: 'application/dxf' });
+  const name = d.fileName.replace(/\.[^.]+$/, '') + '.dxf';
+  let path = null;
+  try {
+    if (!saveAs && platform.isDesktop && doc.path && /\.dxf$/i.test(doc.path)) {
+      await platform.writeFile(doc.path, blob);
+      path = doc.path;
+    } else {
+      path = await platform.saveFile(blob, name, dxfFilters());
+      if (path === null) return false; // cancelled
+    }
+  } catch (err) {
+    console.error(err);
+    toast(`${t('saveFailed')}: ${err?.message || err}`, true, 7000);
+    return false;
+  }
+  if (path) {
+    doc.path = path;
+    d.fileName = path.split(/[\\/]/).pop();
+    platform.addRecent(path);
+  } else if (!/\.dxf$/i.test(d.fileName)) d.fileName = name;
+  state.edit.markSaved();
+  const notes = [];
+  if (d.source !== 'dxf' && !doc.dxfNoticeShown) {
+    doc.dxfNoticeShown = true;
+    notes.push(t('savedDxfNote').replace('{file}', d.fileName));
+  } else notes.push(path ? `${t('savedTo')} ${path}` : `${t('saved')}: ${d.fileName}`);
+  const summary = report.summary();
+  if (summary) notes.push(`${t('saveSummary')} ${summary}.`);
+  toast(notes.join(' '), false, summary || notes.length > 1 ? 10000 : 4000);
+  updateEditUi();
+  buildInfoPanel();
+  return true;
+}
+
+/**
+ * Before the drawing is replaced or closed: unsaved edits are saved (true), dropped (true)
+ * or the action is cancelled (false).
+ */
+function confirmDiscard() {
+  if (!state.edit?.modified) return Promise.resolve(true);
+  const dlg = $('#unsavedDialog');
+  if (dlg.open) return Promise.resolve(false);
+  $('#unsavedText').textContent = t('unsavedText').replace('{file}', state.doc.drawing.fileName);
+  dlg.returnValue = '';
+  return new Promise((resolve) => {
+    dlg.onclose = async () => {
+      if (dlg.returnValue === 'discard') resolve(true);
+      else if (dlg.returnValue === 'save') resolve(await saveDrawing(false));
+      else resolve(false);
+    };
+    dlg.showModal();
+    dlg.querySelector('button[value=save]').focus();
+  });
+}
+
+// Leaving the web page with unsaved changes asks first (the browser shows its own question).
+window.addEventListener('beforeunload', (ev) => {
+  if (state.edit?.modified) { ev.preventDefault(); ev.returnValue = ''; }
+});
+// Desktop: closing the window (or Quit) with unsaved changes asks Save / Don't save / Cancel.
+platform.onCloseRequested(async () => {
+  if (await confirmDiscard()) platform.closeWindow();
 });
 
 // Drag and drop. The desktop program receives dropped files natively (with their paths,
@@ -1325,6 +2014,10 @@ function onMenu(id) {
   else if (!state.doc) return;
   else if (id === 'print') openPrint();
   else if (id === 'export-pdf') openPrint(true);
+  else if (id === 'save') saveDrawing(false);
+  else if (id === 'save-as') saveDrawing(true);
+  else if (id === 'undo') undo();
+  else if (id === 'redo') redo();
   else if (id === 'zoom-extents') viewer.zoomExtents();
   else if (id === 'zoom-in') viewer.zoomAt(1.5);
   else if (id === 'zoom-out') viewer.zoomAt(1 / 1.5);
@@ -1411,7 +2104,8 @@ updateNeeds();
 viewer.setTheme(THEMES[state.theme]);
 setTool('select');
 showProperties();
+updateEditUi();
 if (platform.isDesktop) initDesktop();
 if (new URLSearchParams(location.search).has('sample')) openSample();
 platform.registerServiceWorker();
-window.protocad = { state, viewer, openFile };
+window.protocad = { state, viewer, openFile, ed, ops, saveDrawing, setTool, runCommand, submitCommand, activeSpace };

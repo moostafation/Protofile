@@ -6,8 +6,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node tests/scene.test.mjs public/samples/plant.dxf && node tests/formats.test.mjs && node tests/pdf-text.test.mjs",
-    "tauri": "tauri"
+    "test": "node tests/scene.test.mjs public/samples/plant.dxf && node tests/formats.test.mjs && node tests/pdf-text.test.mjs && node tests/edit.test.mjs && node tests/dxf-writer.test.mjs",
+    "tauri": "tauri",
+    "test:dxf": "node tests/dxf-audit.mjs"
   },
   "keywords": [],
   "author": "",

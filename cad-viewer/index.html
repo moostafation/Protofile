@@ -22,6 +22,7 @@
         <button class="tb" data-action="zoomWindow" data-i18n-title="zoomWindow"><i data-icon="zoomWindow"></i></button>
         <button class="tb hide-sm" data-action="zoomIn" data-i18n-title="zoomIn"><i data-icon="zoomIn"></i></button>
         <button class="tb hide-sm" data-action="zoomOut" data-i18n-title="zoomOut"><i data-icon="zoomOut"></i></button>
+        <button class="tb" data-action="pan" data-tool="pan" data-i18n-title="panTool"><i data-icon="hand"></i></button>
       </div>
       <div class="tb-group" data-needs="doc">
         <button class="tb" data-action="select" data-tool="select" data-i18n-title="select"><i data-icon="select"></i></button>
@@ -38,6 +39,9 @@
           </div>
         </div>
       </div>
+      <div class="tb-group" data-needs="cad">
+        <button class="tb" data-action="toggleEditbar" id="editToggle" data-i18n-title="editTools"><i data-icon="edit"></i><span class="hide-sm" data-i18n="edit"></span></button>
+      </div>
       <div class="spacer"></div>
       <div class="tb-group" data-needs="doc">
         <button class="tb" data-action="print" data-i18n-title="print"><i data-icon="print"></i><span class="hide-sm" data-i18n="print"></span></button>
@@ -45,6 +49,39 @@
       </div>
       <button class="tb" data-action="settings" data-i18n-title="settings"><i data-icon="settings"></i></button>
     </header>
+
+    <div class="editbar" id="editbar" data-needs="cad" hidden>
+      <div class="eb-group" role="toolbar" aria-label="Draw">
+        <span class="eb-label" data-i18n="draw"></span>
+        <button class="tb" data-action="cmd:line" data-tool="line" data-i18n-title="toolLine"><i data-icon="line"></i></button>
+        <button class="tb" data-action="cmd:polyline" data-tool="polyline" data-i18n-title="toolPolyline"><i data-icon="polyline"></i></button>
+        <button class="tb" data-action="cmd:rectangle" data-tool="rectangle" data-i18n-title="toolRectangle"><i data-icon="rect"></i></button>
+        <button class="tb" data-action="cmd:circle" data-tool="circle" data-i18n-title="toolCircle"><i data-icon="circle"></i></button>
+        <button class="tb" data-action="cmd:arc" data-tool="arc" data-i18n-title="toolArc"><i data-icon="arc"></i></button>
+        <button class="tb" data-action="cmd:text" data-tool="text" data-i18n-title="toolText"><i data-icon="text"></i></button>
+        <button class="tb" data-action="cmd:revcloud" data-tool="revcloud" data-i18n-title="toolRevcloud"><i data-icon="cloud"></i></button>
+      </div>
+      <div class="eb-group" role="toolbar" aria-label="Modify">
+        <span class="eb-label" data-i18n="modify"></span>
+        <button class="tb" data-action="cmd:move" data-tool="move" data-i18n-title="toolMove"><i data-icon="move"></i></button>
+        <button class="tb" data-action="cmd:copy" data-tool="copy" data-i18n-title="toolCopy"><i data-icon="copy"></i></button>
+        <button class="tb" data-action="cmd:rotate" data-tool="rotate" data-i18n-title="toolRotate"><i data-icon="rotate"></i></button>
+        <button class="tb" data-action="cmd:scale" data-tool="scale" data-i18n-title="toolScale"><i data-icon="scale"></i></button>
+        <button class="tb" data-action="cmd:mirror" data-tool="mirror" data-i18n-title="toolMirror"><i data-icon="mirror"></i></button>
+        <button class="tb" data-action="cmd:offset" data-tool="offset" data-i18n-title="toolOffset"><i data-icon="offset"></i></button>
+        <button class="tb" data-action="cmd:explode" data-tool="explode" data-i18n-title="toolExplode"><i data-icon="explode"></i></button>
+        <button class="tb" data-action="cmd:erase" data-tool="erase" data-i18n-title="toolErase"><i data-icon="trash"></i></button>
+      </div>
+      <div class="eb-group">
+        <button class="tb" data-action="undo" id="undoBtn" data-i18n-title="undo" disabled><i data-icon="undo"></i></button>
+        <button class="tb" data-action="redo" id="redoBtn" data-i18n-title="redo" disabled><i data-icon="redo"></i></button>
+      </div>
+      <div class="eb-group">
+        <button class="tb" data-action="save" id="saveBtn" data-i18n-title="saveDxf"><i data-icon="save"></i><span class="hide-sm" data-i18n="save"></span></button>
+        <button class="tb" data-action="saveAs" data-i18n-title="saveAsDxf"><i data-icon="saveAs"></i></button>
+      </div>
+      <label class="eb-group eb-layer"><span class="eb-label" data-i18n="currentLayer"></span><select id="curLayer" data-i18n-title="currentLayerHint"></select></label>
+    </div>
 
     <div class="workspace">
       <aside class="sidebar" id="sidebar" data-needs="doc">
@@ -58,6 +95,7 @@
         <section class="tab-panel" data-panel="layers">
           <div class="panel-tools">
             <input type="search" id="layerFilter" dir="auto" data-i18n-placeholder="filter" />
+            <button class="mini icon-mini" data-action="layerNew" data-i18n-title="newLayer"><i data-icon="plus"></i></button>
             <button class="mini" data-action="layersAll" data-i18n="showAll"></button>
             <button class="mini" data-action="layersNone" data-i18n="hideAll"></button>
           </div>
@@ -104,9 +142,16 @@
         <div class="drop-hint" id="dropHint"><span data-i18n="dropHere"></span></div>
         <div class="loading" id="loading" hidden><div class="spinner"></div><span id="loadingText"></span></div>
         <div class="toast" id="toast" hidden></div>
+        <div class="cmdbar" id="cmdbar" hidden>
+          <label for="cmdInput" id="cmdPrompt"></label>
+          <input id="cmdInput" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" dir="ltr" enterkeyhint="go" />
+        </div>
         <div class="bottom-bar" data-needs="doc">
           <div class="space-tabs" id="spaceTabs"></div>
           <div class="status" id="status"></div>
+          <span class="sel-count" id="selCount" hidden></span>
+          <button type="button" class="stat-btn" id="snapBtn" data-needs="cad" data-i18n-title="snapHint">SNAP</button>
+          <button type="button" class="stat-btn" id="orthoBtn" data-needs="cad" data-i18n-title="orthoHint">ORTHO</button>
         </div>
         <button class="fab sidebar-toggle" data-action="toggleSidebar" data-needs="doc"><i data-icon="layers"></i></button>
         <button class="fab props-fab" id="propsFab" data-action="showProps" hidden><i data-icon="info"></i><span data-i18n="properties"></span></button>
@@ -227,6 +272,19 @@
     </form>
   </dialog>
 
+  <dialog id="unsavedDialog" class="dialog">
+    <form method="dialog" class="dialog-body">
+      <h2 data-i18n="unsavedTitle"></h2>
+      <p id="unsavedText"></p>
+      <div class="dialog-actions">
+        <button value="cancel" class="btn" data-i18n="cancel"></button>
+        <span class="spacer"></span>
+        <button value="discard" class="btn" data-i18n="dontSave"></button>
+        <button value="save" class="btn primary" data-i18n="save"></button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="formatsDialog" class="dialog">
     <form method="dialog" class="dialog-body">
       <h2 data-i18n="formatsTitle"></h2>
@@ -238,6 +296,7 @@
     </form>
   </dialog>
 
+  <div class="menu" id="layerMenu" hidden></div>
   <!-- accept is filled from the format registry at start-up -->
   <input type="file" id="fileInput" hidden />
   <script type="module" src="/src/main.js"></script>

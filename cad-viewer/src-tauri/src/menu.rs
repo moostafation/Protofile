@@ -4,7 +4,7 @@
 use tauri::menu::{AboutMetadata, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu, SubmenuBuilder};
 use tauri::{AppHandle, Emitter, Wry};
 
-use crate::recent;
+use crate::{files, recent};
 
 fn item(app: &AppHandle, id: &str, text: &str, accelerator: Option<&str>) -> tauri::Result<MenuItem<Wry>> {
     MenuItem::with_id(app, id, text, true, accelerator)
@@ -29,6 +29,9 @@ pub fn build(app: &AppHandle) -> tauri::Result<(Menu<Wry>, Submenu<Wry>)> {
     let mut file = SubmenuBuilder::new(app, "&File")
         .item(&item(app, "open", "&Open\u{2026}", Some("CmdOrCtrl+O"))?)
         .item(&recent)
+        .separator()
+        .item(&item(app, "save", "&Save", Some("CmdOrCtrl+S"))?)
+        .item(&item(app, "save-as", "Save &As DXF\u{2026}", Some("CmdOrCtrl+Shift+S"))?)
         .separator()
         .item(&item(app, "print", "&Print\u{2026}", Some("CmdOrCtrl+P"))?)
         .item(&item(app, "export-pdf", "&Export PDF\u{2026}", Some("CmdOrCtrl+E"))?);
@@ -80,7 +83,11 @@ pub fn build(app: &AppHandle) -> tauri::Result<(Menu<Wry>, Submenu<Wry>)> {
 pub fn on_event(app: &AppHandle, event: MenuEvent) {
     let id = event.id().as_ref();
     match id {
-        "quit" => app.exit(0),
+        "quit" => {
+            if !files::ask_before_closing(app) {
+                app.exit(0);
+            }
+        }
         "recent-clear" => recent::clear(app),
         _ => {
             if let Some(index) = id.strip_prefix("recent:").and_then(|i| i.parse().ok()) {

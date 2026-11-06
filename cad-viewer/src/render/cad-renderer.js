@@ -4,7 +4,8 @@ import { FOREGROUND, luminance } from '../cad/aci.js';
 import { LW_DEFAULT } from '../cad/drawing.js';
 import { STROKE, FILL, TEXT, HATCH, POINT, VPORT } from '../cad/scene.js';
 
-const GRID = 12;
+/** Tiles per side: 12 for small drawings, up to 32 for large ones (smaller tiles rebuild faster after an edit). */
+const gridSize = (n) => Math.max(12, Math.min(18, Math.round(Math.sqrt(n / 150))));
 export const FONT_FAMILY = 'Arial, "Segoe UI", Tahoma, sans-serif';
 /** Cap height / font size ratio used to map CAD text height to a CSS font size. */
 export const CAP_RATIO = 0.72;
@@ -68,13 +69,13 @@ export class CadRenderer {
   }
 
   /**
-   * Groups primitives into a 12 x 12 grid of tiles (plus one global tile for huge and infinite
+   * Groups primitives into a grid of tiles (12 x 12 up to 32 x 32, plus one global tile for huge and infinite
    * ones). Each tile keeps its primitive indices, so an edit only rebuilds the tiles it touches.
    */
   build() {
     const { prims, bbox } = this.scene;
     const [x0, y0, x1, y1] = bbox;
-    this.grid = { x0, y0, w: Math.max(x1 - x0, 1e-9), h: Math.max(y1 - y0, 1e-9) };
+    this.grid = { x0, y0, w: Math.max(x1 - x0, 1e-9), h: Math.max(y1 - y0, 1e-9), n: gridSize(prims.length) };
     this.cells = new Map();
     this.global = this.newTile();
     this.tiles = [this.global];
@@ -87,7 +88,7 @@ export class CadRenderer {
   }
 
   tileOf(p) {
-    const { x0, y0, w, h } = this.grid;
+    const { x0, y0, w, h, n: GRID } = this.grid;
     if (p.infinite || p.k === VPORT) return this.global;
     const bw = p.bb[2] - p.bb[0], bh = p.bb[3] - p.bb[1];
     if (bw > w / 3 || bh > h / 3) return this.global;
@@ -178,9 +179,17 @@ export class CadRenderer {
     }
   }
 
-  /** Layer renamed (the scene's primitives were renamed first): batches are rebuilt with the new name. */
-  renameLayer() {
-    for (const t of this.tiles) t.dirty = true;
+  /** Layer renamed (the scene's primitives were renamed first): batches take the new name in place. */
+  renameLayer(from, to) {
+    for (const t of this.tiles) {
+      for (const map of [t.strokes, t.fills]) {
+        for (const b of map.values()) {
+          if (b.layer === from) b.layer = to;
+          if (b.top === from) b.top = to;
+          if (b.lc === from) b.lc = to;
+        }
+      }
+    }
     this.highlight = null;
   }
 
@@ -325,7 +334,7 @@ export class CadRenderer {
    * Draws the given items in a highlight colour (selection / search hits). The paths are
    * cached per item list and scene version, so large selections stay cheap to redraw.
    */
-  drawItems(ctx, view, items, color, widthPx = 3) {
+  drawItems(ctx, view, items, color, widthPx = 3, boxes = true) {
     const px = 1 / view.scale;
     const scene = this.scene;
     this.highlight ??= new WeakMap();
@@ -361,7 +370,7 @@ export class CadRenderer {
     for (const p of h.texts) drawText(ctx, p, px, color);
     for (const p of h.points) ctx.fillRect(p.x - 3 * px, p.y - 3 * px, 6 * px, 6 * px);
     // Dashed boxes help to find a few small items; for many items they are only noise.
-    if (h.boxes.length <= 40) {
+    if (boxes && h.boxes.length <= 40) {
       ctx.setLineDash([4 * px, 3 * px]);
       ctx.lineWidth = px;
       for (const bb of h.boxes) ctx.strokeRect(bb[0] - 4 * px, bb[1] - 4 * px, bb[2] - bb[0] + 8 * px, bb[3] - bb[1] + 8 * px);

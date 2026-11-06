@@ -1,5 +1,8 @@
 // Interactive 2D viewport: pan/zoom (mouse, wheel, touch), a content canvas and
 // an overlay canvas for tools. The displayed document provides `bbox` and `draw()`.
+// Panning: middle-drag, Space+drag and touch always pan; a left-drag goes to the tool when it
+// wants it (selection window, grips) and pans otherwise. After an edit, renderRegion()
+// repaints only the changed area.
 
 const ZOOM_STEP = 1.0016;
 
@@ -27,6 +30,8 @@ export class Viewer {
     this.frame = 0;
     this.overlayFrame = 0;
     this.interacting = false;
+    this.panKey = false; // Space held: left-drag pans
+    this.lastPaint = 0;
     this.resize = this.resize.bind(this);
     new ResizeObserver(this.resize).observe(host);
     this.bindInput();
@@ -64,8 +69,17 @@ export class Viewer {
   setTool(tool) {
     this.tool?.cancel?.();
     this.tool = tool;
-    this.overlay.style.cursor = tool?.cursor || 'default';
+    this.updateCursor();
     this.renderOverlay();
+  }
+
+  setPanKey(on) {
+    this.panKey = on;
+    this.updateCursor();
+  }
+
+  updateCursor() {
+    this.overlay.style.cursor = this.panKey ? 'grab' : this.tool?.cursor || 'default';
   }
 
   // ---------- coordinates ----------
@@ -136,10 +150,72 @@ export class Viewer {
   // ---------- rendering ----------
   render(full = true) {
     cancelAnimationFrame(this.frame);
-    this.frame = requestAnimationFrame(() => (full ? this.renderFull() : this.renderQuick()));
+    this.pendingFull = full;
+    this.frame = requestAnimationFrame(() => {
+      this.pendingFull = false;
+      if (full) this.renderFull(); else this.renderQuick();
+    });
+  }
+
+  /**
+   * Repaints only the given scene-coordinate boxes (the old and new extents of edited items)
+   * when they cover a small part of the view; otherwise a full render.
+   */
+  renderRegion(boxes) {
+    if (!this.doc || !this.snapView || this.interacting || this.pendingFull) { this.render(true); return; }
+    const bb = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const b of boxes) {
+      if (!b || !Number.isFinite(b[0])) continue;
+      bb[0] = Math.min(bb[0], b[0]); bb[1] = Math.min(bb[1], b[1]); bb[2] = Math.max(bb[2], b[2]); bb[3] = Math.max(bb[3], b[3]);
+    }
+    if (!Number.isFinite(bb[0])) { this.renderOverlay(); return; }
+    this.pendingBoxes = this.pendingBoxes ? [...this.pendingBoxes, bb] : [bb];
+    cancelAnimationFrame(this.frame);
+    this.frame = requestAnimationFrame(() => {
+      this.pendingFull = false;
+      const list = this.pendingBoxes;
+      this.pendingBoxes = null;
+      this.renderPartial(list);
+    });
+  }
+
+  renderPartial(boxes) {
+    const v = this.view;
+    if (v.cx !== this.snapView?.cx || v.cy !== this.snapView?.cy || v.scale !== this.snapView?.scale) { this.renderFull(); return; }
+    // Screen rectangle of the union, padded for line widths and text.
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const b of boxes) {
+      const [ax, ay] = this.worldToScreen(b[0], b[3]);
+      const [bx, by] = this.worldToScreen(b[2], b[1]);
+      x0 = Math.min(x0, ax); y0 = Math.min(y0, ay); x1 = Math.max(x1, bx); y1 = Math.max(y1, by);
+    }
+    const pad = 12;
+    x0 = Math.max(0, Math.floor(x0 - pad)); y0 = Math.max(0, Math.floor(y0 - pad));
+    x1 = Math.min(this.width, Math.ceil(x1 + pad)); y1 = Math.min(this.height, Math.ceil(y1 + pad));
+    if (x1 <= x0 || y1 <= y0) { this.renderOverlay(); this.lastPaint = performance.now(); return; }
+    if ((x1 - x0) * (y1 - y0) > 0.45 * this.width * this.height) { this.renderFull(); return; }
+    const ctx = this.ctx, d = this.dpr;
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.beginPath();
+    ctx.rect(x0 * d, y0 * d, (x1 - x0) * d, (y1 - y0) * d);
+    ctx.clip();
+    ctx.fillStyle = this.theme.bg;
+    ctx.fillRect(x0 * d, y0 * d, (x1 - x0) * d, (y1 - y0) * d);
+    this.applyTransform(ctx);
+    const [wx0, wy1] = this.screenToWorld(x0, y0);
+    const [wx1, wy0] = this.screenToWorld(x1, y1);
+    this.doc.draw(ctx, { scale: v.scale, bounds: [wx0, wy0, wx1, wy1], dpr: d, viewer: this }, this.theme);
+    ctx.restore();
+    const sctx = this.snapshot.getContext('2d');
+    sctx.setTransform(1, 0, 0, 1, 0, 0);
+    sctx.drawImage(this.canvas, x0 * d, y0 * d, (x1 - x0) * d, (y1 - y0) * d, x0 * d, y0 * d, (x1 - x0) * d, (y1 - y0) * d);
+    this.lastPaint = performance.now();
+    this.renderOverlay();
   }
 
   renderFull() {
+    this.pendingBoxes = null;
     const ctx = this.ctx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = this.theme.bg;
@@ -158,6 +234,7 @@ export class Viewer {
       sctx.drawImage(this.canvas, 0, 0);
       this.snapView = { ...this.view };
     }
+    this.lastPaint = performance.now();
     this.renderOverlay();
   }
 
@@ -221,7 +298,11 @@ export class Viewer {
     el.addEventListener('pointerdown', (ev) => {
       el.setPointerCapture(ev.pointerId);
       const r = el.getBoundingClientRect();
-      this.pointers.set(ev.pointerId, { x: ev.clientX - r.left, y: ev.clientY - r.top, sx: ev.clientX - r.left, sy: ev.clientY - r.top, button: ev.button, moved: false, type: ev.pointerType });
+      this.pointers.set(ev.pointerId, {
+        x: ev.clientX - r.left, y: ev.clientY - r.top, sx: ev.clientX - r.left, sy: ev.clientY - r.top, button: ev.button, moved: false,
+        type: ev.pointerType, shift: ev.shiftKey, ctrl: ev.ctrlKey || ev.metaKey, mode: null,
+      });
+      if (ev.button === 1) ev.preventDefault(); // no autoscroll on middle-drag
       if (this.pointers.size === 2) this.pinch = this.pinchState();
     });
 
@@ -250,8 +331,12 @@ export class Viewer {
       p.x = x; p.y = y;
       if (!p.moved && Math.hypot(x - p.sx, y - p.sy) > (p.type === 'touch' ? 8 : 4)) p.moved = true;
       if (p.moved) {
-        const dragTool = this.tool?.drag && p.button === 0 && p.type !== 'touch';
-        if (dragTool) this.tool.drag(this.screenToWorld(p.sx, p.sy), this.screenToWorld(x, y), this);
+        // Decided once per gesture: the tool gets the drag (selection window, grip) or it pans.
+        if (!p.mode) {
+          const left = p.button === 0 && p.type !== 'touch' && !this.panKey && this.tool?.drag;
+          p.mode = left && (!this.tool.wantsDrag || this.tool.wantsDrag(this.screenToWorld(p.sx, p.sy), p)) ? 'tool' : 'pan';
+        }
+        if (p.mode === 'tool') this.tool.drag(this.screenToWorld(p.sx, p.sy), this.screenToWorld(x, y), this, p);
         else this.panBy(dx, dy);
       }
       this.cursor = [x, y];
@@ -265,8 +350,9 @@ export class Viewer {
       this.pointers.delete(ev.pointerId);
       if (this.pointers.size < 2) this.pinch = null;
       if (!p) return;
-      if (p.moved && this.tool?.drag && p.button === 0 && p.type !== 'touch') {
-        this.tool.dragEnd?.(this.screenToWorld(p.sx, p.sy), this.screenToWorld(p.x, p.y), this);
+      if (p.moved && p.mode === 'tool') {
+        this.tool.dragEnd?.(this.screenToWorld(p.sx, p.sy), this.screenToWorld(p.x, p.y), this, p);
+        this.renderOverlay();
         return;
       }
       if (!p.moved && ev.type === 'pointerup' && (p.button === 0 || p.type === 'touch')) {

@@ -26,7 +26,63 @@ Known formats that cannot be read in a browser (Revit, Navisworks, SolidWorks, I
 - **Print / export vector PDF**: paper sizes A4–A0 and ANSI, orientation, plot area (extents, view, window), true scale (1:N) or fit, color/monochrome/grayscale, lineweights, title strip, live preview. Arabic and other non-Latin text plots correctly. Images print fitted to the chosen paper and orientation (whole image, current view or a window); PDFs print or download as the original.
 - **Smart tools**: search texts, tags, block names, attribute values and layers; automatic block/cell BOM with attribute breakdown (CSV export); linework length per layer (CSV export).
 - **AI assistant (Claude)**: ask questions in English or Arabic about the drawing, PDF or image. It receives a structured summary of the drawing (for images, the image itself) and optionally an image of the current view, and can search, zoom to and highlight items, and show/hide layers through tool calls.
+- **Editing** of CAD drawings (draw, modify, properties, layers, undo/redo) and **saving as DXF** (AutoCAD 2013): see *Editing* below.
 - Installable PWA (works offline after first use, except the AI assistant) with OS file handling for all openable formats.
+
+### Editing
+Open a DWG, DXF, DGN or PLT drawing and click **Edit** (pencil) in the toolbar to show the Draw/Modify bar (shown by default on computers). Every change can be undone; the title shows `*` while there are unsaved changes, and opening another file, closing the desktop window (or File → Quit) or leaving the web page asks first (Save / Don't save / Cancel).
+
+**Mouse and keys in Select mode**
+| Action | How |
+|---|---|
+| Select | click; **Shift+click** adds or removes; **Ctrl+A** selects everything (not hidden or locked layers); **Esc** clears |
+| Window selection | left-drag **left → right** (blue, solid): objects entirely inside |
+| Crossing selection | left-drag **right → left** (green, dashed): objects inside or touching |
+| Pan | **middle-drag**, **Space+drag**, the **Pan** (hand) tool, or one finger on touch screens; the wheel zooms. In the drawing and modify tools a left-drag pans too |
+| Grips | selected objects (up to 100) show blue grips: drag one, or click it (it turns red) and click/type the new point. Lines: ends and midpoint (moves); polylines: vertices and segment midpoints (straight segments move, arcs change their bulge); circles: center (moves) and quadrants (radius); arcs: ends, midpoint, center; ellipses: axes; texts, blocks and points: insertion point (block attributes have their own grips); other objects one grip that moves them |
+| Erase | **Delete** (or Backspace) |
+| Undo / redo | **Ctrl+Z** / **Ctrl+Y** or **Ctrl+Shift+Z**, or the toolbar arrows. Inside a command Ctrl+Z first removes the last point |
+
+**Commands**: click a toolbar button, or type the alias (like AutoCAD) and press **Enter** or **Space**. Enter on an empty command line repeats the last command; **Esc** ends a command (lines and polylines drawn so far are kept).
+| Tool | Alias | Steps |
+|---|---|---|
+| Line | `L` | points, continuous segments; `U` removes the last segment, `C` closes, Enter ends |
+| Polyline | `PL` | points; `U` removes the last point, `C` closes, Enter (or double-click) finishes |
+| Rectangle | `REC` | two corners, e.g. `@2000,1000` for the second |
+| Circle | `C` | center, then radius (type it or click a point) |
+| Arc | `A` | start point, a point on the arc, end point |
+| Text | `T` | start point, height, rotation, then the text; Enter starts the next line, Enter on an empty line ends |
+| Revision cloud | `RC` | two corners of a rectangle; `A` first sets the arc length |
+| Move / Copy | `M` / `CO` | base point, second point (Copy repeats until Enter) |
+| Rotate | `RO` | base point, angle in degrees (or click) |
+| Scale | `SC` | base point, factor |
+| Mirror | `MI` | two points of the mirror line, then `Y` to erase the source or Enter to keep it |
+| Offset | `O` | distance, then object (line, polyline, circle, arc) and side; repeats until Enter |
+| Explode | `X` | block references (with their array copies; attributes become text), polylines (into lines and arcs), dimensions, tables, multileaders, multilines |
+| Erase | `E` | the selection |
+
+Modify tools act on the selection; with nothing selected they first ask for objects (click, two clicks for a window/crossing, Enter to go on).
+
+**Typed input (command line)**: while a command waits for a point, typing goes to the command line above the status bar (also tappable on phones):
+- `x,y` absolute coordinates (drawing units), `@dx,dy` relative to the last point,
+- `@dist<angle` polar (degrees, counter-clockwise from +X), `dist<angle` polar from the origin,
+- a number alone: that distance along the direction of the cursor from the last point (horizontal/vertical with Ortho), e.g. move the cursor right and type `1500`.
+
+**Snap** (`F3`, status bar) snaps to endpoints, midpoints, centers, insertion points, intersections and perpendicular points; **Ortho** (`F8`) keeps new points horizontal or vertical from the last one.
+
+**Properties** (right panel) edit the selection: layer, colour (ByLayer, ByBlock, the AutoCAD colour index palette or a true colour), linetype, lineweight, and per type: line endpoints, circle/arc center, radius, diameter and angles, text content, height, rotation and width, MTEXT content, block position, rotation, scale and **attribute values** (valve tags, sizes…), polyline closed/width, dimension text override. With several objects, shared values are shown and others read *\*varies\**; a change applies to all of them. Objects on locked layers are shown but cannot be selected or changed.
+
+**Layers panel**: `+` makes a new layer (type its name), each row has visibility (eye; double-click a row to isolate), lock and colour (click the swatch), and the `⋯` menu: Make current, Rename, Color, Lock/Unlock, Delete (empty layers only; not 0, Defpoints or the current layer). The current layer (bold, ✓, also in the Draw bar) receives new objects. Layer visibility is a view setting and is not saved.
+
+**Saving** (`Ctrl+S`, `Ctrl+Shift+S` = Save As, toolbar, desktop File menu): drawings are saved as **DXF (AutoCAD 2013, AC1027)**, which AutoCAD, BricsCAD, DraftSight, LibreCAD, QCAD and MicroStation open. In the desktop program `Ctrl+S` writes back to the DXF that was opened (or last saved); otherwise a Save dialog (desktop) or a download (web) is used. DWG cannot be written in the browser: a DWG, DGN or HP-GL drawing is saved as DXF, and the program says so once ("use Save As DWG in AutoCAD if needed"). After saving, a note lists what was converted or left out, e.g. *1 MULTILEADER written as lines and text, 1 3DSOLID skipped*. What the DXF contains: header, classes, all tables (layers with colour, true colour, linetype, lineweight, lock/freeze/on), text and dimension styles, every block (also anonymous dimension blocks), model space, all layouts with their viewports, and the objects AutoCAD expects (dictionaries, layouts, plot styles, materials). Entities keep their handles; new objects get unique ones.
+
+| Written as is | Converted | Not saved |
+|---|---|---|
+| LINE, CIRCLE, ARC, ELLIPSE, LWPOLYLINE (widths, bulges), POLYLINE 2D/3D, polyface and mesh, SPLINE, TEXT, MTEXT, INSERT + ATTRIB, ATTDEF, DIMENSION (with its block), LEADER, HATCH (all boundary edge types, pattern lines, solid, gradient), SOLID, TRACE, 3DFACE, POINT, XLINE, RAY, TOLERANCE, WIPEOUT, VIEWPORT | MULTILEADER → polylines, arrowheads and MTEXT; MLINE → polylines; ACAD_TABLE → a block reference of its graphics; IMAGE → its frame (the image file is not embedded); special dimensions → block reference | 3D solids, regions, bodies, OLE objects, proxies, DGN dimensions/tags |
+
+Dimensions and tables keep their graphics in an anonymous block: moving, rotating, scaling or mirroring one transforms that block with it (a copy gets its own block), and a scaled dimension shows the scaled value. Dimensions are not re-generated from a dimension style. Mirrored texts stay readable (like AutoCAD's MIRRTEXT = 0). Exploded block contents take the block reference's layer (for objects on layer 0) and its ByBlock colour, linetype and lineweight, so they look the same.
+
+**Checking saved files**: `npm run test:dxf` writes every test drawing as DXF, reads it back and compares it with the original, then audits the files with [ezdxf](https://ezdxf.mozman.at) (skipped when Python 3 with `pip install ezdxf` is not available). `DXF_SAMPLES=<folder> npm run test:dxf` adds the DWG/DXF files of a folder.
 
 ### Desktop program (Windows)
 **Install**
@@ -61,7 +117,9 @@ npm install
 npm run dev      # development server (http://localhost:5173)
 npm run build    # production build in dist/
 npm run preview  # serve the production build locally
-npm test         # parser/scene smoke test + DGN, HP-GL, format registry and file association tests
+npm test         # parser/scene smoke test, DGN, HP-GL, format registry and file association tests,
+                 # editing tests and the DXF writer round trip
+npm run test:dxf # DXF round trip + ezdxf audit of the written files (needs Python 3 with ezdxf)
 ```
 The `dist` folder is a static site that can be hosted anywhere (GitHub Pages, Netlify, an internal server). It must be served over `http://` or `https://`, not opened as a local `index.html`.
 
@@ -74,12 +132,15 @@ The `dist` folder is a static site that can be hosted anywhere (GitHub Pages, Ne
 src/
   formats/    format registry (extensions, magic bytes, loaders, unsupported-format hints),
               DGN V7 and HP-GL readers, image documents (raster, SVG, TIFF)
-  cad/        DXF parser, DWG loading (LibreDWG WebAssembly in a worker), drawing model, tessellation into primitives
+  cad/        DXF parser and writer, DWG loading (LibreDWG WebAssembly in a worker), drawing model, tessellation into primitives
   render/     canvas renderer, interactive viewer, vector PDF export (jsPDF)
   pdf/        PDF viewing, text extraction and search (pdf.js)
-  tools/      picking and snapping index, measure/select/window tools, analysis (search, BOM, summaries)
+  edit/       editing: document with undo/redo (model.js), entity geometry (transform, grips, offset,
+              explode, new entities), edit operations (ops.js)
+  tools/      picking and snapping index, select/measure/window tools, drawing and modify tools,
+              command line parsing, analysis (search, BOM, summaries)
   ai/         Claude assistant with tool use
-  ui/         icons and markdown rendering
+  ui/         icons, markdown rendering, colour picker, properties editor
   platform.js web/desktop differences (dialogs, saving, printing, OS file handling)
 src-tauri/    desktop program (Tauri 2, Rust): window, menu, file dialogs, file associations,
               single instance, recent files, CSP and permissions (tauri.conf.json, capabilities/)
@@ -88,7 +149,7 @@ tests/        smoke and format tests, fixture generators, fixtures/
 To add a format, add an entry to `src/formats/registry.js` (extensions, category, `open()` or an unsupported `hint`) and list openable extensions in `public/manifest.webmanifest` and in `fileAssociations` of `src-tauri/tauri.conf.json` (tests check that both match the registry). The `3d` category is reserved for 3D models.
 
 ### Known limitations
-SHX fonts are substituted with Arial; 3D solids, raster images and xrefs inside DWG/DXF are not drawn; DWG support depends on LibreDWG, so unusual files may open incomplete (saving as DXF is a workaround). DGN V8 needs an export from MicroStation; DGN dimensions, tags and shared cells are not drawn and 3D DGN files are shown in plan (top) view. HP-GL files with PostScript or raster (PCL) content show only their HP-GL vectors. Very large TIFF pages (over ~32 megapixels) are displayed at reduced resolution (Info says so); measurements still use the original pixel size.
+SHX fonts are substituted with Arial; 3D solids, raster images and xrefs inside DWG/DXF are not drawn; DWG support depends on LibreDWG, so unusual files may open incomplete (saving as DXF is a workaround). DGN V8 needs an export from MicroStation; DGN dimensions, tags and shared cells are not drawn and 3D DGN files are shown in plan (top) view. HP-GL files with PostScript or raster (PCL) content show only their HP-GL vectors. Editing: drawings are saved as DXF only (not DWG); dimensions are transformed with their graphics but not re-generated from their style; the lock state of layers in DWG files is not read (LibreDWG reports every layer locked, so DWG layers open unlocked); objects with a tilted 3D orientation (extrusion not along Z) are not moved/rotated; complex linetypes keep their dashes but lose embedded shapes and text when saved. Very large TIFF pages (over ~32 megapixels) are displayed at reduced resolution (Info says so); measurements still use the original pixel size.
 
 ### License
 GPL-3.0, because DWG reading uses LibreDWG (`@mlightcad/libredwg-web`, GPL-3.0). TIFF decoding uses [UTIF.js](https://github.com/photopea/UTIF.js) (`utif2`, MIT). The test fixtures `smalltest.dgn` and `test_dgnv8.dgn` come from GDAL's autotest data (MIT/X licence).
@@ -113,6 +174,7 @@ ProtoCAD Viewer عارض ذكي للرسومات الهندسية، متاح **�
 - **القياس**: مسافة (مع ΔX و ΔY والزاوية)، طول مسار، ومساحة ومحيط، مع التقاط (Snap) للنهايات والمنتصف والمراكز. في ملفات PDF القياس بالمليمتر على الورق، وفي الصور بالمليمتر لو الملف فيه دقة مسح ضوئي (150 dpi أو أكتر) وإلا بالبكسل، و**معايرة المقياس** بنقطتين معروفتين تحوّل القياس للمتر الحقيقي (مفيدة جداً للرسومات الممسوحة بالاسكانر).
 - **الطباعة وتصدير PDF**: PDF متجه بجودة طباعة (A4 حتى A0 و ANSI، طولي/عرضي، مقياس حقيقي أو ملائمة للورقة، ملون أو أسود أو رمادي، وسُمك الخطوط) مع معاينة. الصور بتتطبع ملائمة لمقاس الورق والاتجاه المختار. النصوص العربية تُطبع بشكل صحيح.
 - **بحث ذكي** عن النصوص والتاجات والبلوكات والطبقات، و**حصر البلوكات (BOM)** وأطوال الخطوط لكل طبقة مع تصدير CSV.
+- **التعديل على الرسمة**: زر **Edit** بيظهر أدوات الرسم (خط، Polyline، مستطيل، دائرة، قوس، نص، Revision cloud) والتعديل (نقل، نسخ، تدوير، تكبير، Mirror، Offset، Explode، مسح) بنفس اختصارات AutoCAD (`L`، `PL`، `M`، `CO`...)، مع إدخال الإحداثيات بالكتابة (`x,y` و `@dx,dy` و `@المسافة<الزاوية` أو رقم المسافة)، و Snap و Ortho (`F8`)، وتعديل الخصائص (الطبقة واللون وقيم الـ Attributes زي التاجات والمقاسات)، وإدارة الطبقات، و Undo/Redo. الحفظ بصيغة **DXF** (AutoCAD 2013) بـ `Ctrl+S`، وملفات DWG بتتحفظ DXF (AutoCAD بيفتحها، ومنه Save As DWG لو محتاج).
 - **المساعد الذكي (Claude)**: اسأله بالعربي أو الإنجليزي عن الرسمة أو ملف الـ PDF أو الصورة — يلخص، يعمل جدول كميات، يراجع التاجات، ويشرح الجزء الظاهر على الشاشة، ويقدر يبحث ويعمل zoom ويخفي ويظهر الطبقات بنفسه.
 
 ### التشغيل

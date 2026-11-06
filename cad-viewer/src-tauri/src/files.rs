@@ -7,6 +7,7 @@
 use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, SystemTime};
 
@@ -19,11 +20,13 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::recent;
 
-/// Files the user chose in this session, and files waiting for the page to open them.
+/// Files the user chose in this session, files waiting for the page to open them, and whether
+/// the open drawing has unsaved changes (closing the window then asks the page first).
 #[derive(Default)]
 pub struct Session {
     allowed: Mutex<HashSet<PathBuf>>,
     pending: Mutex<Vec<PathBuf>>,
+    modified: AtomicBool,
 }
 
 impl Session {
@@ -34,6 +37,33 @@ impl Session {
     pub fn is_allowed(&self, path: &Path) -> bool {
         lock(&self.allowed).contains(path)
     }
+
+    pub fn is_modified(&self) -> bool {
+        self.modified.load(Ordering::SeqCst)
+    }
+}
+
+/// The page reports unsaved changes, so closing the window asks before the drawing is lost.
+#[tauri::command]
+pub fn set_modified(session: State<'_, Session>, modified: bool) {
+    session.modified.store(modified, Ordering::SeqCst);
+}
+
+/// Closes the window once the page has asked about unsaved changes.
+#[tauri::command]
+pub fn close_window(window: WebviewWindow, session: State<'_, Session>) -> Result<(), String> {
+    session.modified.store(false, Ordering::SeqCst);
+    window.destroy().map_err(|e| e.to_string())
+}
+
+/// Window close or File > Quit: with unsaved changes the page asks Save / Don't save / Cancel
+/// (it then calls `close_window`); returns true when the close must wait for that.
+pub fn ask_before_closing(app: &AppHandle) -> bool {
+    if !app.state::<Session>().is_modified() {
+        return false;
+    }
+    let _ = app.emit("close-requested", ());
+    true
 }
 
 /// Locks a mutex, recovering the data if a previous holder panicked.
@@ -186,7 +216,7 @@ fn body<'a>(request: &'a Request<'_>) -> Result<&'a [u8], String> {
 /// Headers: `x-file-name` (suggested name) and `x-filters` (JSON list of filters), percent-encoded.
 /// Resolves to the saved path, or null when cancelled.
 #[tauri::command]
-pub async fn save_file(window: WebviewWindow, request: Request<'_>) -> Result<Option<String>, String> {
+pub async fn save_file(window: WebviewWindow, session: State<'_, Session>, request: Request<'_>) -> Result<Option<String>, String> {
     let bytes = body(&request)?;
     let name = header(&request, "x-file-name")?;
     let filters: Vec<Filter> = serde_json::from_str(&header(&request, "x-filters")?).map_err(|e| e.to_string())?;
@@ -196,7 +226,35 @@ pub async fn save_file(window: WebviewWindow, request: Request<'_>) -> Result<Op
     };
     let path = chosen.into_path().map_err(|e| e.to_string())?;
     std::fs::write(&path, bytes).map_err(|e| format!("Could not save {}: {e}", path.display()))?;
+    // A drawing saved here can be saved again (Ctrl+S) without the dialog.
+    session.allow(&path);
     path_string(&path).map(Some)
+}
+
+/// Saves a drawing back to its file (Ctrl+S): only DXF files the user opened or saved, written
+/// through a temporary file so a failed write never leaves half a drawing.
+/// Headers: `x-path` (percent-encoded). Body: the file contents.
+#[tauri::command]
+pub async fn write_file(app: AppHandle, request: Request<'_>) -> Result<(), String> {
+    let bytes = body(&request)?;
+    let path = PathBuf::from(header(&request, "x-path")?);
+    if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("dxf")) {
+        return Err(format!("{} is not a DXF file; use Save As.", file_name(&path)));
+    }
+    if !app.state::<Session>().is_allowed(&path) && !recent::contains(&app, &path) {
+        return Err(format!("{} was not opened by you, so it cannot be overwritten. Use Save As.", file_name(&path)));
+    }
+    write_replacing(&path, bytes).map_err(|e| format!("Could not save {}: {e}", path.display()))
+}
+
+fn write_replacing(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".protocad-tmp");
+    let tmp = PathBuf::from(tmp);
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
 }
 
 /// A file name that is safe on every platform, ending in `.pdf`.
@@ -265,6 +323,18 @@ mod tests {
         let cwd = Path::new("/work");
         let args = vec!["app".into(), "--flag".into(), "a.dwg".into(), "/abs/b.pdf".into(), String::new()];
         assert_eq!(paths_from_args(args, cwd), vec![PathBuf::from("/work/a.dwg"), PathBuf::from("/abs/b.pdf")]);
+    }
+
+    #[test]
+    fn replacing_write_keeps_no_temporary_file() {
+        let dir = std::env::temp_dir().join(format!("protocad-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.dxf");
+        std::fs::write(&path, b"old").unwrap();
+        write_replacing(&path, b"new").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

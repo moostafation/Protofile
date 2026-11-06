@@ -1,4 +1,5 @@
-// Interactive tools: select, zoom window, rectangle pick, and measurements with snapping.
+// Interactive tools: zoom window, rectangle pick, and measurements with snapping
+// (selection and editing tools are in edit-tools.js).
 import { polygonArea } from '../cad/geometry.js';
 import { t } from '../i18n.js';
 
@@ -49,32 +50,11 @@ export function drawSnapMarker(o, sx, sy, kind) {
   if (kind === 'end' || kind === 'ins') o.rect(sx - 6, sy - 6, 12, 12);
   else if (kind === 'center') o.arc(sx, sy, 7, 0, Math.PI * 2);
   else if (kind === 'mid') { o.moveTo(sx, sy - 7); o.lineTo(sx + 7, sy + 6); o.lineTo(sx - 7, sy + 6); o.closePath(); }
+  else if (kind === 'int') { o.moveTo(sx - 7, sy - 7); o.lineTo(sx + 7, sy + 7); o.moveTo(sx + 7, sy - 7); o.lineTo(sx - 7, sy + 7); o.rect(sx - 2, sy - 2, 4, 4); }
+  else if (kind === 'perp') { o.moveTo(sx - 7, sy + 6); o.lineTo(sx + 7, sy + 6); o.moveTo(sx - 3, sy + 6); o.lineTo(sx - 3, sy - 7); o.moveTo(sx - 3, sy + 1); o.lineTo(sx + 2, sy + 1); o.lineTo(sx + 2, sy + 6); }
   else { o.moveTo(sx - 6, sy - 6); o.lineTo(sx + 6, sy + 6); o.moveTo(sx + 6, sy - 6); o.lineTo(sx - 6, sy + 6); }
   o.stroke();
   o.restore();
-}
-
-/** Select tool: click picks an entity, hover highlights it. */
-export class SelectTool {
-  constructor(app) {
-    this.app = app;
-    this.cursor = 'default';
-    this.hover = null;
-  }
-  move(w, s, viewer) {
-    const r = 6 / viewer.view.scale;
-    this.hover = this.app.pickAt(w[0], w[1], r);
-  }
-  click(w, s, viewer) {
-    const r = 8 / viewer.view.scale;
-    this.app.select(this.app.pickAt(w[0], w[1], r));
-  }
-  drawOverlay(o, viewer) {
-    if (this.hover !== null && this.hover !== undefined && !this.app.selection.includes(this.hover)) {
-      this.app.drawItemsOverlay(o, viewer, [this.hover], 'rgba(255,159,28,0.65)', 2);
-    }
-  }
-  cancel() { this.hover = null; }
 }
 
 /** Drag (or click twice) to define a rectangle. Used for zoom window and plot window. */

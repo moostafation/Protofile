@@ -138,11 +138,16 @@ const SIMPLE = {
   DIMENSION: {
     2: ['name', 'str'], ...P('definitionPoint', 10), ...P('textPoint', 11), 1: ['text', 'str'], 42: ['measurement', 'num'],
     70: ['dimensionType', 'int'], 3: ['styleName', 'str'], ...P('subDefinitionPoint1', 13), ...P('subDefinitionPoint2', 14),
+    ...P('centerPoint', 15), ...P('arcPoint', 16), 40: ['leaderLength', 'num'], 50: ['rotationAngle', 'deg'], 52: ['obliqueAngle', 'deg'],
+    53: ['textRotation', 'deg'], 71: ['attachmentPoint', 'int'], 72: ['textLineSpacingStyle', 'int'], 41: ['textLineSpacingFactor', 'num'], ...EXT,
   },
+  TOLERANCE: { 3: ['styleName', 'str'], ...P('insertionPoint', 10), 1: ['text', 'str'], ...P('xAxisDirection', 11), ...EXT },
   ACAD_TABLE: { 2: ['blockName', 'str'], ...P('startPoint', 10) },
   VIEWPORT: {
     ...P('viewportCenter', 10), 40: ['width', 'num'], 41: ['height', 'num'], 68: ['status', 'int'], 69: ['viewportId', 'int'],
     ...P('displayCenter', 12), 45: ['viewHeight', 'num'], 51: ['viewTwistAngle', 'deg'], 90: ['statusBitFlags', 'int'],
+    ...P('viewDirection', 16), ...P('targetPoint', 17), 42: ['perspectiveLensLength', 'num'], 43: ['frontClipZ', 'num'], 44: ['backClipZ', 'num'],
+    50: ['snapAngle', 'deg'], 72: ['circleZoomPercent', 'int'],
   },
 };
 
@@ -210,6 +215,8 @@ function readMText(c) {
       case 31: pt(e, 'direction').z = num(v); break;
       case 40: e.textHeight = num(v); break;
       case 41: e.rectWidth = num(v); break;
+      case 46: e.rectHeight = num(v); break;
+      case 73: e.lineSpacingStyle = int(v); break;
       case 44: e.lineSpacing = num(v); break;
       case 71: e.attachmentPoint = int(v); break;
       case 72: e.drawingDirection = int(v); break;
@@ -273,6 +280,15 @@ function readSpline(c) {
       case 11: fp = { x: num(v), y: 0, z: 0 }; e.fitPoints.push(fp); break;
       case 21: if (fp) fp.y = num(v); break;
       case 31: if (fp) fp.z = num(v); break;
+      case 12: pt(e, 'startTangent').x = num(v); break;
+      case 22: pt(e, 'startTangent').y = num(v); break;
+      case 32: pt(e, 'startTangent').z = num(v); break;
+      case 13: pt(e, 'endTangent').x = num(v); break;
+      case 23: pt(e, 'endTangent').y = num(v); break;
+      case 33: pt(e, 'endTangent').z = num(v); break;
+      case 210: pt(e, 'normal').x = num(v); break;
+      case 220: pt(e, 'normal').y = num(v); break;
+      case 230: pt(e, 'normal').z = num(v); break;
       default: common(e, code, v);
     }
   }
@@ -292,7 +308,10 @@ function readLeader(c) {
       case 20: if (v) v.y = num(val); break;
       case 71: e.isArrowheadEnabled = int(val) === 1; break;
       case 72: e.isSpline = int(val) === 1; break;
-      case 3: e.styleName = v; break;
+      case 73: e.leaderCreationFlag = int(val); break;
+      case 40: e.textHeight = num(val); break;
+      case 41: e.textWidth = num(val); break;
+      case 3: e.styleName = val; break;
       default: common(e, code, val);
     }
   }
@@ -448,10 +467,18 @@ function readHatch(c) {
   }
 
   // Pattern data and the rest.
-  let def = null, dashes = 0;
+  let def = null, dashes = 0, seed = null;
   for (; !c.done; c.next()) {
     const code = c.code, v = c.value;
     switch (code) {
+      case 98: e.seedPoints = []; break;
+      case 10: if (e.seedPoints) { seed = { x: num(v), y: 0 }; e.seedPoints.push(seed); } break;
+      case 20: if (seed) seed.y = num(v); break;
+      case 452: e.gradientColorFlag = int(v); break;
+      case 460: e.gradientRotation = num(v); break;
+      case 461: e.gradientDefinition = num(v); break;
+      case 462: e.colorTint = num(v); break;
+      case 421: (e.gradientColors ??= []).push({ rgb: int(v) & 0xffffff }); e.gradientRgb ??= int(v) & 0xffffff; break;
       case 75: e.hatchStyle = int(v); break;
       case 76: e.patternType = int(v); break;
       case 52: e.patternAngle = num(v) * DEG; break;
@@ -466,7 +493,6 @@ function readHatch(c) {
       case 450: e.gradientFlag = int(v); break;
       case 470: e.gradientName = v; break;
       case 63: e.gradientColorIndex ??= int(v); break;
-      case 421: e.gradientRgb ??= int(v) & 0xffffff; break;
       default: common(e, code, v);
     }
   }
@@ -483,6 +509,9 @@ function readPolylineHeader(c) {
       case 40: e.startWidth = num(v); break;
       case 41: e.endWidth = num(v); break;
       case 30: e.elevation = num(v); break;
+      case 71: e.meshMVertexCount = int(v); break;
+      case 72: e.meshNVertexCount = int(v); break;
+      case 75: e.smoothType = int(v); break;
       case 210: pt(e, 'extrusionDirection').x = num(v); break;
       case 220: pt(e, 'extrusionDirection').y = num(v); break;
       case 230: pt(e, 'extrusionDirection').z = num(v); break;

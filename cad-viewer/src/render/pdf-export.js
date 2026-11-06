@@ -108,7 +108,7 @@ class PdfPainter {
     const order = [FILL, HATCH, STROKE, POINT, VPORT, TEXT];
     for (const kind of order) {
       for (const p of scene.prims) {
-        if (p.k !== kind || !visible(p)) continue;
+        if (p.k !== kind || p.dead || !visible(p)) continue;
         if (kind === FILL) {
           if (p.bg) { doc.setFillColor(255, 255, 255); this.state.fill = null; } else this.setFill(p.rgb);
           if (p.alpha && p.alpha < 1) doc.setGState(new doc.GState({ opacity: p.alpha, 'stroke-opacity': 1 }));

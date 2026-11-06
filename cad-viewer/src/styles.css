@@ -85,6 +85,72 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .menu button:hover { background: var(--panel-2); }
 .menu hr { border: 0; border-top: 1px solid var(--line); margin: 6px 0; }
 
+/* ---------- edit bar (drawing and modify tools) ---------- */
+.editbar {
+  display: flex; align-items: center; gap: 4px; padding: 3px 10px; min-height: 44px;
+  background: var(--panel); border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; flex: none;
+}
+.editbar::-webkit-scrollbar { display: none; }
+.eb-group { display: flex; align-items: center; gap: 1px; padding-inline: 4px; border-inline-start: 1px solid var(--line); flex: none; }
+.eb-group:first-child { border-inline-start: 0; padding-inline-start: 0; }
+.eb-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; margin-inline-end: 4px; }
+.editbar .tb { height: 34px; min-width: 34px; padding: 0 7px; }
+.tb:disabled { opacity: 0.4; cursor: default; background: transparent; }
+.eb-layer select { max-width: 200px; padding: 5px 8px; }
+
+/* ---------- command line ---------- */
+.cmdbar {
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: 42px; z-index: 20;
+  display: flex; align-items: center; gap: 8px; width: min(720px, calc(100% - 24px));
+  padding: 6px 8px; background: color-mix(in srgb, var(--panel) 94%, transparent); border: 1px solid var(--line);
+  border-radius: var(--radius); box-shadow: var(--shadow); font-size: 13px;
+}
+.cmdbar label { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; min-width: 0; }
+.cmdbar input { flex: 1 1 140px; min-width: 90px; padding: 5px 8px; font-family: ui-monospace, Consolas, monospace; }
+.cmdbar.bad input { border-color: var(--danger); }
+.stat-btn {
+  border: 1px solid var(--line); background: none; color: var(--muted); border-radius: 4px; padding: 1px 7px;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.4px; cursor: pointer; flex: none;
+}
+.stat-btn.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 60%, transparent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.sel-count { color: var(--accent); white-space: nowrap; flex: none; }
+
+/* ---------- colour picker ---------- */
+.color-picker { width: 330px; min-width: 0; z-index: 60; display: flex; flex-direction: column; gap: 6px; }
+.color-picker .cp-head { font-weight: 600; padding: 2px 2px 0; }
+.color-picker .cp-by { display: flex; gap: 6px; }
+.color-picker .cp-grid { display: grid; grid-template-columns: repeat(24, 1fr); gap: 1px; }
+.color-picker .cp-row { display: flex; gap: 1px; }
+.color-picker .cp-gap { flex: 1; }
+.color-picker .aci { width: auto; aspect-ratio: 1; min-width: 0; padding: 0; border: 1px solid rgba(0, 0, 0, 0.25); border-radius: 2px; cursor: pointer; }
+.color-picker .cp-row .aci { width: 18px; height: 18px; }
+.color-picker .aci:hover, .color-picker .aci.cur, .color-picker .mini.cur { outline: 2px solid var(--accent); outline-offset: 0; }
+.color-picker .cp-true { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.color-picker input[type=color] { width: 44px; height: 26px; padding: 0; border: 1px solid var(--line); background: none; }
+.color-picker .menu button, .color-picker button.mini { width: auto; }
+
+/* ---------- editable properties ---------- */
+.props .pe { width: 100%; min-width: 0; padding: 4px 7px; font-variant-numeric: tabular-nums; }
+.props textarea.pe { resize: vertical; }
+.props .pe-color { display: inline-flex; align-items: center; gap: 6px; }
+.props .pe-color .swatch { width: 12px; height: 12px; border-radius: 3px; border: 1px solid rgba(127, 127, 127, 0.6); }
+.props dd:has(> .pe) { align-self: center; }
+.props .small-note { font-size: 12px; margin-top: 6px; }
+.props dt { align-self: center; }
+
+/* ---------- layer rows ---------- */
+.list .row-btn { background: none; border: 0; padding: 2px; cursor: pointer; color: var(--muted); display: inline-flex; border-radius: 4px; }
+.list .row-btn svg { width: 16px; height: 16px; }
+.list .row-btn:hover { color: var(--text); background: var(--line); }
+.list .row-btn.on { color: var(--accent); }
+.list li.current .name { font-weight: 700; }
+.list li .cur-mark { color: var(--accent); display: inline-flex; }
+.list li .cur-mark svg { width: 15px; height: 15px; }
+.list button.swatch { padding: 0; cursor: pointer; }
+.list .rename { flex: 1; min-width: 0; padding: 3px 6px; }
+.mini.icon-mini { padding: 4px 6px; }
+.mini.icon-mini svg, .mini.icon-mini i { width: 15px; height: 15px; }
+
 /* ---------- layout ---------- */
 .workspace { flex: 1; display: flex; min-height: 0; position: relative; }
 .sidebar, .rightbar {
@@ -286,4 +352,11 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
   .sidebar.open ~ .stage .props-fab { display: none; }
   .print-grid { grid-template-columns: 1fr; }
   .print-preview { min-height: 200px; }
+  .editbar { padding-inline: 6px; }
+  .eb-label { display: none; }
+  .cmdbar { bottom: 40px; font-size: 12px; flex-wrap: wrap; gap: 4px 8px; }
+  /* The round buttons move above the command line while it is shown. */
+  .cmdbar:not([hidden]) ~ .fab { bottom: 124px; }
+  .cmdbar label { white-space: normal; }
+  .stat-btn { padding: 1px 4px; }
 }

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "What the ProtoCAD Viewer page may do: listen to app events (menu, files to open, drag & drop, recent files) and call the app's own file commands. There is no general file system, shell or opener access: the commands only read files the user chose and write where the user chose in a Save dialog.",
+  "description": "What the ProtoCAD Viewer page may do: listen to app events (menu, files to open, drag & drop, recent files) and call the app's own file commands. There is no general file system, shell or opener access: the commands only read files the user chose and write where the user chose in a Save dialog (or back to a DXF drawing the user opened or saved).",
   "windows": ["main"],
   "platforms": ["windows", "linux", "macOS"],
   "permissions": [
@@ -11,6 +11,9 @@
     "allow-read-file",
     "allow-take-pending",
     "allow-save-file",
+    "allow-write-file",
+    "allow-set-modified",
+    "allow-close-window",
     "allow-print-pdf",
     "allow-recent-files",
     "allow-add-recent",

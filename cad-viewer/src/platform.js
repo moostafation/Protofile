@@ -135,6 +135,34 @@ export async function saveFile(blob, name, filters) {
   return oneDialog(() => invoke('save_file', bytes, fileHeaders(name, { 'x-filters': encodeURIComponent(JSON.stringify(filters)) })));
 }
 
+/**
+ * Desktop: writes the drawing back to a file the user opened or saved in this session (Ctrl+S on
+ * a DXF). Only DXF files can be written this way; everything else goes through the Save dialog.
+ */
+export async function writeFile(path, blob) {
+  if (!isDesktop) throw new Error('Saving to a path needs the desktop program.');
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  await invoke('write_file', bytes, fileHeaders(path.split(/[\\/]/).pop(), { 'x-path': encodeURIComponent(path) }));
+}
+
+let lastModified = null;
+/** Desktop: tells the window whether there are unsaved changes (closing then asks first). */
+export function setModified(modified) {
+  if (!isDesktop || modified === lastModified) return;
+  lastModified = modified;
+  invoke('set_modified', { modified }).catch((err) => console.warn(err.message));
+}
+
+/** Desktop: the user closes the window (or chooses Quit) while there are unsaved changes. */
+export function onCloseRequested(handler) {
+  if (isDesktop) listen('close-requested', handler).catch((err) => console.error(err));
+}
+
+/** Desktop: closes the window after the page asked about unsaved changes. */
+export function closeWindow() {
+  if (isDesktop) invoke('close_window').catch((err) => console.error(err));
+}
+
 function printInFrame(blob) {
   const url = URL.createObjectURL(blob);
   const frame = document.createElement('iframe');

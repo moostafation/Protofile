@@ -2,7 +2,7 @@
 // add, erase, move/rotate/scale/mirror (transform), copy, explode, offset, property changes.
 // `ctx` = { doc, drawing, container (the space's entity list), measure? }.
 import { cloneData } from './model.js';
-import { transformEntity, explodeEntity, offsetEntity, assignHandles } from './entities.js';
+import { transformEntity, explodeEntity, offsetEntity, assignHandles, retextDimension } from './entities.js';
 
 /** Block holding a table's graphics. */
 export function tableBlockName(drawing, e) {
@@ -55,7 +55,7 @@ function envFor(ctx, tx, shared) {
     measure: ctx.measure,
     tableBlock: (e) => tableBlockName(drawing, e),
     // Dimension and table graphics live in their own (anonymous) block: transform it too.
-    blockXform: (name, M, owner) => {
+    blockXform: (name, M, owner, value) => {
       let block = name && drawing.blocks.get(name);
       if (!block) return;
       if (shared?.get(name) > 1) {
@@ -64,7 +64,14 @@ function envFor(ctx, tx, shared) {
         if (owner.type === 'ACAD_TABLE') { owner.blockName = block.name; drawing.tableBlocks?.set(owner, block.name); } else owner.name = block.name;
         shared.set(name, shared.get(name) - 1);
       }
-      for (const be of block.entities) tx.modify(be, (x) => transformEntity(x, M, { measure: ctx.measure }), { container: block.entities, block: block.name });
+      for (const be of block.entities) {
+        tx.modify(be, (x) => {
+          transformEntity(x, M, { measure: ctx.measure });
+          // A scaled dimension shows its new measurement.
+          if (value && x.type === 'MTEXT') x.text = retextDimension(x.text, value.from, value.to);
+          if (value && x.type === 'TEXT') x.text = retextDimension(x.text, value.from, value.to);
+        }, { container: block.entities, block: block.name });
+      }
     },
   };
 }

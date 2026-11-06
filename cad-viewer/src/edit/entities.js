@@ -283,13 +283,16 @@ export function transformEntity(e, M, env = {}) {
       return true;
     }
     case 'DIMENSION': case 'ARC_DIMENSION': case 'LARGE_RADIAL_DIMENSION': {
+      const measured = Number.isFinite(e.measurement) ? e.measurement : dimMeasure(e);
       for (const k of ['definitionPoint', 'textPoint', 'subDefinitionPoint1', 'subDefinitionPoint2', 'centerPoint', 'arcPoint', 'insertionPoint']) tp(M, e[k]);
       if (e.textRotation) e.textRotation = mapAngle(sim, e.textRotation);
       if (e.rotationAngle !== undefined && ((e.dimensionType ?? 0) & 7) === 0) e.rotationAngle = normAngle(mapAngle(sim, e.rotationAngle));
       const kind = (e.dimensionType ?? 0) & 7;
-      if (Number.isFinite(e.measurement) && [0, 1, 3, 4, 6].includes(kind)) e.measurement *= sim.s;
+      const linear = [0, 1, 3, 4, 6].includes(kind);
+      if (Number.isFinite(e.measurement) && linear) e.measurement *= sim.s;
       if (e.leaderLength) e.leaderLength *= sim.s;
-      if (e.name) env.blockXform?.(e.name, M, e);
+      const retext = linear && Number.isFinite(measured) && Math.abs(sim.s - 1) > 1e-12 && (!e.text || e.text.includes('<>'));
+      if (e.name) env.blockXform?.(e.name, M, e, retext ? { from: measured, to: measured * sim.s } : null);
       return true;
     }
     case 'ACAD_TABLE':
@@ -343,6 +346,21 @@ export function transformEntity(e, M, env = {}) {
       return true;
     default:
       return false;
+  }
+}
+
+/** Measured value of a dimension from its definition points (when the file does not store it). */
+function dimMeasure(e) {
+  const p1 = e.subDefinitionPoint1, p2 = e.subDefinitionPoint2, c = e.centerPoint, d = e.definitionPoint;
+  switch ((e.dimensionType ?? 0) & 7) {
+    case 0: {
+      if (!p1 || !p2) return NaN;
+      const a = e.rotationAngle ?? 0;
+      return Math.abs((p2.x - p1.x) * Math.cos(a) + (p2.y - p1.y) * Math.sin(a));
+    }
+    case 1: return p1 && p2 ? Math.hypot(p2.x - p1.x, p2.y - p1.y) : NaN;
+    case 3: case 4: return c && d ? Math.hypot(c.x - d.x, c.y - d.y) : NaN;
+    default: return NaN;
   }
 }
 
@@ -1032,6 +1050,20 @@ export function multileaderParts(e, env = {}) {
     });
   }
   return out;
+}
+
+/**
+ * After a dimension was scaled, its graphics block still shows the old value: numbers in its
+ * texts that equal the old measurement (at the precision they are written with) get the new one.
+ */
+export function retextDimension(t, from, to) {
+  return String(t ?? '').replace(/\d+(?:[.,]\d+)?/g, (m) => {
+    const sep = m.includes(',') ? ',' : '.';
+    const dec = m.includes(sep) ? m.split(sep)[1].length : 0;
+    const v = parseFloat(m.replace(',', '.'));
+    if (Math.abs(v - +from.toFixed(dec)) > 1e-9) return m;
+    return to.toFixed(dec).replace('.', sep);
+  });
 }
 
 /** Gives an entity (and its attributes) new handles. */

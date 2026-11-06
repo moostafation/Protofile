@@ -81,16 +81,20 @@ pub fn run() {
             Ok(())
         })
         .on_menu_event(menu::on_event)
-        .on_window_event(|window, event| {
-            if let WindowEvent::DragDrop(drop) = event {
-                files::on_drag_drop(window.app_handle(), drop);
-            }
+        .on_window_event(|window, event| match event {
+            WindowEvent::DragDrop(drop) => files::on_drag_drop(window.app_handle(), drop),
+            // Unsaved changes: the page asks Save / Don't save / Cancel, then closes the window.
+            WindowEvent::CloseRequested { api, .. } if files::ask_before_closing(window.app_handle()) => api.prevent_close(),
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             files::pick_file,
             files::read_file,
             files::take_pending,
             files::save_file,
+            files::write_file,
+            files::set_modified,
+            files::close_window,
             files::print_pdf,
             recent::recent_files,
             recent::add_recent,
