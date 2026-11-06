@@ -481,8 +481,11 @@ class Plotter {
       const off = k * 2 * h; // character cells are twice the cap height
       const { x, y } = this.vert(x0 + s * off, y0 - c * off);
       const e = this.base('TEXT');
+      // Negative sizes mirror: a negative width flips the characters left-right (negative width
+      // factor), a negative height upside down (half turn, which also flips left-right).
       Object.assign(e, {
-        text: str, textHeight: h / PLU_PER_MM, rotation: this.dir + this.ro * DEG, xScale: w / h / DEFAULT_CHAR_RATIO,
+        text: str, textHeight: Math.abs(h) / PLU_PER_MM, rotation: this.dir + this.ro * DEG + (h < 0 ? Math.PI : 0),
+        xScale: (Math.abs(w) / Math.abs(h) / DEFAULT_CHAR_RATIO) * (w < 0 !== h < 0 ? -1 : 1),
         halign: col, valign: row === 0 ? 0 : row === 1 ? 2 : 3,
         startPoint: { x, y, z: 0 }, endPoint: { x, y, z: 0 },
       });
@@ -673,15 +676,16 @@ class Plotter {
       case 'DI': this.dir = p.length >= 2 && (p[0] || p[1]) ? Math.atan2(p[1], p[0]) : 0; break;
       // DR: run and rise are percentages of the P1-P2 width and height.
       case 'DR': this.dir = p.length >= 2 && (p[0] || p[1]) ? Math.atan2(p[1] * (this.p2[1] - this.p1[1]), p[0] * (this.p2[0] - this.p1[0])) : 0; break;
-      // A zero or missing width/height (e.g. "SI 0.2,0") falls back to the default size.
+      // A zero or missing width/height (e.g. "SI 0.2,0") falls back to the default size; negative
+      // sizes are legal and mirror the characters (kept, with their sign).
       case 'SI':
-        if (p.length >= 2 && p[0] > 0 && p[1] > 0) { this.charW = p[0] * 400; this.charH = p[1] * 400; }
+        if (p.length >= 2 && p[0] && p[1]) { this.charW = p[0] * 400; this.charH = p[1] * 400; }
         else this.defaultCharSize();
         break;
       case 'SR': {
         const w = p.length >= 2 ? p[0] : 0.75, h = p.length >= 2 ? p[1] : 1.5;
         const cw = (w / 100) * Math.abs(this.p2[0] - this.p1[0]), ch = (h / 100) * Math.abs(this.p2[1] - this.p1[1]);
-        if (cw > 0 && ch > 0) { this.charW = cw; this.charH = ch; } else this.defaultCharSize();
+        if (cw && ch) { this.charW = cw; this.charH = ch; } else this.defaultCharSize();
         break;
       }
       case 'SD': case 'AD':

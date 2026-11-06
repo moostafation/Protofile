@@ -104,9 +104,11 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
-          ls -l installers
+          # upload-artifact keeps the bundle folders (nsis/, msi/, deb/, appimage/): upload the files.
+          mapfile -t files < <(find installers -type f | sort)
+          printf '%s\n' "${files[@]}"
           if gh release view "$TAG" > /dev/null 2>&1; then
-            gh release upload "$TAG" installers/* --clobber
+            gh release upload "$TAG" "${files[@]}" --clobber
           else
-            gh release create "$TAG" installers/* --draft --title "ProtoCAD Viewer $TAG" --generate-notes
+            gh release create "$TAG" "${files[@]}" --draft --title "ProtoCAD Viewer $TAG" --generate-notes
           fi

@@ -59,13 +59,14 @@ export async function openDialog(filters) {
 
 /**
  * Files handed over by the operating system: double-click / "Open with" and files dropped
- * on the window (desktop), or PWA file handling (web). `handler` receives File-like objects.
+ * on the window (desktop), or PWA file handling (web). `handler(files, errors)` receives
+ * File-like objects and, on desktop, messages about handed-over files that cannot be opened.
  */
 export function onOpenFiles(handler) {
   if (isDesktop) {
     const take = async () => {
-      const paths = await invoke('take_pending');
-      if (paths.length) handler(paths.map(readPath));
+      const { paths, errors } = await invoke('take_pending');
+      if (paths.length || errors.length) handler(paths.map(readPath), errors);
     };
     // Paths queued before the listener existed are collected by the first take().
     listen('open-pending', take).then(take).catch((err) => console.error(err));
@@ -107,6 +108,19 @@ export function clearRecent() {
 
 const fileHeaders = (name, extra = {}) => ({ headers: { 'x-file-name': encodeURIComponent(name), ...extra } });
 
+const RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\.|$)/i;
+/**
+ * A file name that works on every system: no \ / : * ? " < > | or control characters (layout
+ * names often contain them), no trailing dots or spaces, and not a reserved Windows device name
+ * (CON, PRN, AUX, NUL, COM1, LPT1...), which gets a leading underscore.
+ */
+export function safeFileName(name, fallback = 'drawing') {
+  let s = String(name ?? '').replace(/[\x00-\x1f\\/:*?"<>|]/g, '_').replace(/[. ]+$/, '').trim();
+  if (!s || /^\.+$/.test(s)) s = fallback;
+  if (RESERVED.test(s)) s = '_' + s;
+  return s.slice(0, 200);
+}
+
 function download(blob, name) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -121,19 +135,31 @@ function download(blob, name) {
 /**
  * Saves a file: native Save dialog (desktop) or a browser download (web).
  * Resolves to the saved path on desktop, null when the user cancelled (or another file dialog
- * is open), and '' on the web.
+ * is open), and '' on the web. The desktop dialog starts in `directory` (the open drawing's
+ * folder) or else the folder used last, and adds the filter's extension to a name typed without it.
  * @param {Blob} blob
  * @param {string} name suggested file name
  * @param {{ name: string, extensions: string[] }[]} filters
+ * @param {{ directory?: string|null }} [opts]
  */
-export async function saveFile(blob, name, filters) {
+export async function saveFile(blob, name, filters, opts = {}) {
+  name = safeFileName(name);
   if (!isDesktop) {
     download(blob, name);
     return '';
   }
   const bytes = new Uint8Array(await blob.arrayBuffer());
-  return oneDialog(() => invoke('save_file', bytes, fileHeaders(name, { 'x-filters': encodeURIComponent(JSON.stringify(filters)) })));
+  const extra = { 'x-filters': encodeURIComponent(JSON.stringify(filters)) };
+  if (opts.directory) extra['x-directory'] = encodeURIComponent(opts.directory);
+  return oneDialog(() => invoke('save_file', bytes, fileHeaders(name, extra)));
 }
+
+/** Desktop: View > Theme shows the active theme. */
+export function setThemeMenu(theme) {
+  if (isDesktop) invoke('set_theme_menu', { theme }).catch((err) => console.warn(err.message));
+}
+
+
 
 /**
  * Desktop: writes the drawing back to a file the user opened or saved in this session (Ctrl+S on

@@ -22,6 +22,12 @@ check('lines are in logical order with normal letters', () => {
   assert.deepEqual(texts, ['مضخة المياه المثلجة P-101', 'صمام بوابة V-101 قطر DN100', 'Valve schedule / جدول المحابس']);
   assert.ok(!/[ﭐ-﷿ﹰ-﻿]/.test(texts.join('')), 'no presentation forms');
 });
+check('zero-width non-joiners (Persian) are ignored on both sides of a search', () => {
+  const items = [{ str: 'طول ۲۰ میلی\u200cمتر', transform: [10, 0, 0, 10, 100, 700], width: 120, height: 10, dir: 'rtl' }];
+  const lines = buildLines(items);
+  assert.equal(findInLines(lines, 'میلیمتر').length, 1, 'query without ZWNJ');
+  assert.equal(findInLines(lines, 'میلی\u200cمتر').length, 1, 'query with ZWNJ');
+});
 check('Arabic search finds words and maps back to their glyph items', () => {
   const pump = findInLines(pages[0], 'مضخة');
   assert.equal(pump.length, 1);

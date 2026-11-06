@@ -401,10 +401,13 @@ class DxfWriter {
     out.n(40, base.textHeight > 0 ? base.textHeight : 1);
     out.s(1, s);
     if (base.rotation) out.n(50, normDeg(base.rotation));
-    if ((base.xScale ?? 1) !== 1 && base.xScale > 0) out.n(41, base.xScale);
+    // DXF width factors are positive: a mirrored text (negative factor) is written "backward".
+    const wf = Math.abs(base.xScale || 1);
+    if (wf !== 1) out.n(41, wf);
     if (base.obliqueAngle) out.n(51, normDeg(base.obliqueAngle));
     out.s(7, this.styleName(base.styleName));
-    if (base.generationFlag) out.i(71, base.generationFlag);
+    const gen = (base.generationFlag ?? 0) | (base.xScale < 0 ? 2 : 0);
+    if (gen) out.i(71, gen);
     const ha = base.halign ?? 0, va = base.valign ?? 0;
     if (ha) out.i(72, ha);
     if (ha || va) {

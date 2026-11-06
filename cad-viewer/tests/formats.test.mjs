@@ -292,17 +292,39 @@ test('manifest file_handlers list exactly the openable extensions', () => {
   assert.deepEqual([...listed].sort(), [...new Set(openableExtensions())].sort());
 });
 
-test('desktop file associations (src-tauri/tauri.conf.json) list exactly the openable extensions', () => {
-  const conf = JSON.parse(fs.readFileSync(path.join(here, '..', 'src-tauri', 'tauri.conf.json'), 'utf8'));
+test('desktop: CAD formats are associated, PDFs and images only offered under "Open with"', () => {
+  const tauri = path.join(here, '..', 'src-tauri');
+  const conf = JSON.parse(fs.readFileSync(path.join(tauri, 'tauri.conf.json'), 'utf8'));
   const assoc = conf.bundle.fileAssociations;
   const exts = assoc.flatMap((a) => a.ext);
+  const cad = FORMATS.filter((f) => f.open && f.category === 'cad').flatMap((f) => f.exts);
+  const others = openableExtensions().filter((e) => !cad.includes(e));
   assert.equal(new Set(exts).size, exts.length, 'no extension is associated twice');
-  assert.deepEqual([...exts].sort(), [...new Set(openableExtensions())].sort());
+  // NSIS (APP_ASSOCIATE) and MSI make associated types default to the program: CAD types only.
+  assert.deepEqual([...exts].sort(), [...cad].sort());
   // Windows uses `name` as the registry class (ProgID) and `description` in Explorer; Linux needs a MIME type.
   for (const a of assoc) {
     assert.match(a.name, /^ProtoCAD\.[A-Z]+$/, `${a.ext} has a ProtoCAD class name`);
     assert.ok(a.description && a.mimeType, `${a.ext} has a description and a MIME type`);
   }
+  // PDFs and images: OpenWithProgids in the NSIS hook and the MSI fragment, never the type's default.
+  const nsh = fs.readFileSync(path.join(tauri, conf.bundle.windows.nsis.installerHooks), 'utf8');
+  const nsisTypes = [...nsh.matchAll(/!insertmacro PROTOCAD_OPEN_WITH "(\w+)"/g)].map((m) => m[1]);
+  assert.deepEqual(nsisTypes.sort(), [...others].sort(), 'NSIS Open with types');
+  assert.ok(!/APP_ASSOCIATE/.test(nsh), 'the hook does not associate');
+  assert.ok(!/WriteRegStr SHCTX "Software\\Classes\\\.\$\{EXT\}" "" "\$\{PROGID\}"/.test(nsh), 'the hook never sets the default');
+  const wxs = fs.readFileSync(path.join(tauri, conf.bundle.windows.wix.fragmentPaths[0]), 'utf8');
+  const msiTypes = [...wxs.matchAll(/Key="Software\\Classes\\\.(\w+)\\OpenWithProgids"/g)].map((m) => m[1]);
+  assert.deepEqual(msiTypes.sort(), [...others].sort(), 'MSI Open with types');
+  assert.ok(!/Key="Software\\Classes\\\.\w+" /.test(wxs), 'the MSI fragment never sets a default');
+  assert.deepEqual(conf.bundle.windows.wix.componentRefs, ['OpenWithEntries']);
+  assert.ok(wxs.includes('Component Id="OpenWithEntries"'));
+  // Linux: the desktop file offers the PDF/image MIME types too; the deb teaches the desktop the CAD extensions.
+  const desktop = fs.readFileSync(path.join(tauri, conf.bundle.linux.deb.desktopTemplate), 'utf8');
+  for (const m of ['application/pdf', 'image/png', 'image/jpeg', 'image/tiff', 'image/svg+xml']) assert.ok(desktop.includes(m), m);
+  const mime = fs.readFileSync(path.join(tauri, Object.values(conf.bundle.linux.deb.files)[0]), 'utf8');
+  const globs = [...mime.matchAll(/<glob pattern="\*\.(\w+)"/g)].map((m) => m[1]);
+  assert.deepEqual(globs.sort(), [...cad].sort(), 'MIME globs for every CAD extension');
 });
 
 console.log('Robustness and display');
@@ -323,6 +345,15 @@ test('HP-GL: a zero character size falls back to the default (label stays visibl
   const texts = byType(db, 'TEXT');
   assert.equal(texts.length, 2);
   for (const t of texts) assert.ok(Number.isFinite(t.xScale) && t.xScale > 0 && t.textHeight > 0, JSON.stringify(t));
+});
+
+test('HP-GL: negative character sizes mirror the label instead of falling back', () => {
+  const db = parseHpgl(bytes('IN;SP1;PU0,0;PD400,0;PU0,0;SI-0.2,0.3;LBABC\x03;SI0.2,-0.3;LBDEF\x03;SR-1,-2;LBGHI\x03'));
+  const [a, b, c] = byType(db, 'TEXT');
+  near(a.textHeight, 3, 1e-9); assert.ok(a.xScale < 0, 'mirrored left-right');
+  near(b.textHeight, 3, 1e-9); assert.ok(b.xScale < 0 && Math.abs(b.rotation - Math.PI) < 1e-9, 'upside down');
+  assert.ok(c.xScale > 0 && Math.abs(c.rotation - Math.PI) < 1e-9, 'both: a half turn');
+  scene(db, 'hpgl');
 });
 
 test('DWG: critical LibreDWG errors fail unless the file still has drawing objects', () => {

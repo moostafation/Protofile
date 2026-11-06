@@ -1,5 +1,7 @@
 //! Recently opened files: kept in the app data folder, shown in File > Open Recent and on the
-//! welcome screen. Files that no longer exist are dropped when the list is read.
+//! welcome screen. Files that cannot be reached when the list is read (a disconnected network
+//! drive, an unplugged disk) are hidden from the welcome screen but kept; an entry is removed
+//! when opening it finds the file gone, or with Clear Recent Files.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -83,11 +85,34 @@ fn to_strings(list: &[PathBuf]) -> Vec<String> {
     list.iter().filter_map(|p| path_string(p).ok()).collect()
 }
 
-/// Menu label: the file name, then its folder. `&` would be read as a mnemonic marker.
+const LABEL_MAX: usize = 70;
+
+/// Shortens text to `max` characters by cutting out its middle: "C:\Projects\…\Pumps".
+fn middle_ellipsis(text: &str, max: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= max || max < 5 {
+        return text.to_string();
+    }
+    let keep = max - 1;
+    let head = keep / 2;
+    let tail = keep - head;
+    let mut out: String = chars[..head].iter().collect();
+    out.push('\u{2026}');
+    out.extend(&chars[chars.len() - tail..]);
+    out
+}
+
+/// Menu label: "name — folder", each part isolated for the bidirectional algorithm (FSI … PDI)
+/// and the whole label left-to-right (LRM first), so an Arabic name still comes first; shortened
+/// in the middle to about 70 characters.
+/// `&` would be read as a mnemonic marker.
 fn label(path: &Path) -> String {
     let name = path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     let dir = path.parent().map_or_else(String::new, |d| d.display().to_string());
-    format!("{name}  \u{2014}  {dir}").replace('&', "&&")
+    let name = middle_ellipsis(&name, LABEL_MAX / 2 + 10);
+    let room = LABEL_MAX.saturating_sub(name.chars().count() + 3).max(12);
+    let dir = middle_ellipsis(&dir, room);
+    format!("\u{200E}\u{2068}{name}\u{2069} \u{2014} \u{2068}{dir}\u{2069}").replace('&', "&&")
 }
 
 /// Rebuilds the items of File > Open Recent (`recent:<index>`, then "Clear Recent Files").
@@ -121,15 +146,16 @@ pub fn clear(app: &AppHandle) {
     update(app, Vec::clear);
 }
 
-/// The list, after dropping files that were deleted or moved (async: checking files on a
-/// disconnected network drive can take a while).
+/// The files of the list that can be reached now. The check runs on a copy, outside the lock
+/// and off the async runtime: a disconnected network drive can take many seconds to answer,
+/// and the menu (main thread) must never wait for it. Unreachable entries stay in the list.
 #[tauri::command]
 pub async fn recent_files(app: AppHandle) -> Vec<String> {
-    let stale = lock(&app.state::<Recent>().list).iter().any(|p| !p.is_file());
-    if stale {
-        update(&app, |list| list.retain(|p| p.is_file()));
-    }
-    to_strings(&lock(&app.state::<Recent>().list))
+    let list = lock(&app.state::<Recent>().list).clone();
+    let reachable = tauri::async_runtime::spawn_blocking(move || list.into_iter().filter(|p| p.is_file()).collect::<Vec<_>>())
+        .await
+        .unwrap_or_default();
+    to_strings(&reachable)
 }
 
 /// Records a file the page opened successfully. Only files the user chose can be added.
@@ -149,4 +175,28 @@ pub async fn add_recent(app: AppHandle, session: State<'_, Session>, path: Strin
 #[tauri::command]
 pub async fn clear_recent(app: AppHandle) {
     clear(&app);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn long_paths_are_shortened_in_the_middle() {
+        let s = middle_ellipsis("abcdefghijklmnopqrstuvwxyz", 11);
+        assert_eq!(s, "abcde\u{2026}vwxyz");
+        assert_eq!(s.chars().count(), 11);
+        assert_eq!(middle_ellipsis("short", 70), "short");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn labels_isolate_name_and_folder() {
+        let deep = format!("/home/eng/{}/مخطط المضخات.dwg", "projects/".repeat(12));
+        let l = label(Path::new(&deep));
+        assert!(l.starts_with("\u{200E}\u{2068}مخطط المضخات.dwg\u{2069} \u{2014} \u{2068}/home/"), "{l}");
+        assert!(l.chars().count() <= LABEL_MAX + 5, "{} chars (5 of them invisible bidi marks)", l.chars().count());
+        assert!(l.contains('\u{2026}'));
+        assert_eq!(label(Path::new("/a/R&D.dxf")), "\u{200E}\u{2068}R&&D.dxf\u{2069} \u{2014} \u{2068}/a\u{2069}");
+    }
 }

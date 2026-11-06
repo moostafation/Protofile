@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- File types of ProtoCAD Viewer that shared-mime-info does not know (or knows without these
+     extensions), so the desktop recognises them and offers ProtoCAD Viewer to open them.
+     Installed to /usr/share/mime/packages by the .deb (the mime database updates itself). -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="image/vnd.dwg">
+    <comment>AutoCAD drawing</comment>
+    <glob pattern="*.dwg"/>
+    <glob pattern="*.dwt"/>
+    <glob pattern="*.dws"/>
+  </mime-type>
+  <mime-type type="image/vnd.dxf">
+    <comment>DXF drawing</comment>
+    <glob pattern="*.dxf"/>
+  </mime-type>
+  <mime-type type="application/x-dgn">
+    <comment>MicroStation DGN drawing</comment>
+    <glob pattern="*.dgn"/>
+  </mime-type>
+  <mime-type type="application/vnd.hp-hpgl">
+    <comment>HP-GL plot file</comment>
+    <glob pattern="*.plt"/>
+    <glob pattern="*.hpgl"/>
+    <glob pattern="*.hgl"/>
+    <glob pattern="*.hp2"/>
+    <glob pattern="*.pen"/>
+  </mime-type>
+</mime-info>

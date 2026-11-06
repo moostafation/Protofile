@@ -22,12 +22,15 @@ fn is_app_url(url: &Url) -> bool {
 }
 
 fn create_main_window(app: &AppHandle) -> tauri::Result<()> {
-    let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
+    let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
         .title("ProtoCAD Viewer")
         .inner_size(1400.0, 900.0)
         .min_inner_size(900.0, 600.0)
-        .center()
-        .background_color(tauri::window::Color(20, 23, 28, 255))
+        .center();
+    // A dark window background avoids a white flash before the page paints. On Linux it would
+    // also paint the GTK menu bar, whose text is then unreadable with a light theme.
+    let builder = if cfg!(target_os = "linux") { builder } else { builder.background_color(tauri::window::Color(20, 23, 28, 255)) };
+    let window = builder
         // The page sets `document.title` to "<file> – ProtoCAD Viewer"; show it in the title bar.
         .on_document_title_changed(|window, title| {
             let _ = window.set_title(&title);
@@ -71,13 +74,15 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle();
             app.manage(recent::Recent::load(handle));
-            let (menu, recent_menu) = menu::build(handle)?;
+            let (menu, recent_menu, themes) = menu::build(handle)?;
+            app.manage(themes);
             app.state::<recent::Recent>().set_menu(recent_menu);
             let list = recent::list(handle);
             recent::fill_menu(handle, &list)?;
             app.set_menu(menu)?;
             create_main_window(handle)?;
-            files::queue_open(handle, files::paths_from_args(std::env::args().collect(), &current_dir()));
+            // args_os: names that are not valid Unicode must not panic (they are reported to the page).
+            files::queue_open(handle, files::paths_from_args(std::env::args_os(), &current_dir()));
             Ok(())
         })
         .on_menu_event(menu::on_event)
@@ -95,6 +100,7 @@ pub fn run() {
             files::write_file,
             files::set_modified,
             files::close_window,
+            menu::set_theme_menu,
             files::print_pdf,
             recent::recent_files,
             recent::add_recent,

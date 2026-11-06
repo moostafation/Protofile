@@ -92,88 +92,6 @@
         "description": "HP-GL plot file",
         "mimeType": "application/vnd.hp-hpgl",
         "role": "Viewer"
-      },
-      {
-        "ext": [
-          "pdf"
-        ],
-        "name": "ProtoCAD.PDF",
-        "description": "PDF document",
-        "mimeType": "application/pdf",
-        "role": "Viewer",
-        "rank": "Alternate"
-      },
-      {
-        "ext": [
-          "png"
-        ],
-        "name": "ProtoCAD.PNG",
-        "description": "PNG image",
-        "mimeType": "image/png",
-        "role": "Viewer",
-        "rank": "Alternate"
-      },
-      {
-        "ext": [
-          "jpg",
-          "jpeg"
-        ],
-        "name": "ProtoCAD.JPEG",
-        "description": "JPEG image",
-        "mimeType": "image/jpeg",
-        "role": "Viewer",
-        "rank": "Alternate"
-      },
-      {
-        "ext": [
-          "gif"
-        ],
-        "name": "ProtoCAD.GIF",
-        "description": "GIF image",
-        "mimeType": "image/gif",
-        "role": "Viewer",
-        "rank": "Alternate"
-      },
-      {
-        "ext": [
-          "bmp"
-        ],
-        "name": "ProtoCAD.BMP",
-        "description": "BMP image",
-        "mimeType": "image/bmp",
-        "role": "Viewer",
-        "rank": "Alternate"
-      },
-      {
-        "ext": [
-          "webp"
-        ],
-        "name": "ProtoCAD.WEBP",
-        "description": "WebP image",
-        "mimeType": "image/webp",
-        "role": "Viewer",
-        "rank": "Alternate"
-      },
-      {
-        "ext": [
-          "svg"
-        ],
-        "name": "ProtoCAD.SVG",
-        "description": "SVG image",
-        "mimeType": "image/svg+xml",
-        "role": "Viewer",
-        "rank": "Alternate"
-      },
-      {
-        "ext": [
-          "tif",
-          "tiff"
-        ],
-        "name": "ProtoCAD.TIFF",
-        "description": "TIFF image",
-        "mimeType": "image/tiff",
-        "role": "Viewer",
-        "rank": "Alternate"
       }
     ],
     "windows": {
@@ -183,12 +101,24 @@
       },
       "nsis": {
         "installMode": "currentUser",
-        "installerIcon": "icons/icon.ico"
+        "installerIcon": "icons/icon.ico",
+        "installerHooks": "windows/open-with.nsh"
+      },
+      "wix": {
+        "fragmentPaths": [
+          "windows/open-with.wxs"
+        ],
+        "componentRefs": [
+          "OpenWithEntries"
+        ]
       }
     },
     "linux": {
       "deb": {
-        "desktopTemplate": "linux/protocad-viewer.desktop"
+        "desktopTemplate": "linux/protocad-viewer.desktop",
+        "files": {
+          "/usr/share/mime/packages/protocad-viewer.xml": "linux/protocad-viewer-mime.xml"
+        }
       },
       "rpm": {
         "desktopTemplate": "linux/protocad-viewer.desktop"

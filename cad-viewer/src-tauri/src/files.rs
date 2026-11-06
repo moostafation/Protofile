@@ -5,14 +5,16 @@
 //! by dropping them on the window, or earlier (recent files).
 
 use std::collections::HashSet;
-use std::io::ErrorKind;
+use std::ffi::OsString;
+use std::fs::OpenOptions;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, SystemTime};
 
 use percent_encoding::percent_decode_str;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::{AppHandle, DragDropEvent, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
@@ -26,7 +28,11 @@ use crate::recent;
 pub struct Session {
     allowed: Mutex<HashSet<PathBuf>>,
     pending: Mutex<Vec<PathBuf>>,
+    /// Why handed-over files could not be opened (collected with the pending files).
+    errors: Mutex<Vec<String>>,
     modified: AtomicBool,
+    /// Folder of the last Save dialog (also kept in the app data folder between runs).
+    last_dir: Mutex<Option<PathBuf>>,
 }
 
 impl Session {
@@ -74,10 +80,23 @@ pub fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 /// Queues files to open (command line, second launch, drag & drop, Open Recent) and tells
 /// the page, which collects them with `take_pending`, so none is lost before it is ready.
 pub fn queue_open(app: &AppHandle, paths: Vec<PathBuf>) {
+    // The page works with paths as text: names that are not valid Unicode (possible on Linux),
+    // or that came through a lossy conversion, cannot be opened; say so instead of "not found".
+    let (paths, bad): (Vec<PathBuf>, Vec<PathBuf>) =
+        paths.into_iter().partition(|p| p.to_str().is_some_and(|s| !s.contains('\u{FFFD}') || p.exists()));
+    let session = app.state::<Session>();
+    for path in &bad {
+        lock(&session.errors).push(format!(
+            "{} cannot be opened: its name contains characters that are not valid Unicode. Rename the file and open it again.",
+            path.to_string_lossy()
+        ));
+    }
     if paths.is_empty() {
+        if !bad.is_empty() {
+            let _ = app.emit("open-pending", ());
+        }
         return;
     }
-    let session = app.state::<Session>();
     {
         let mut pending = lock(&session.pending);
         for path in paths {
@@ -89,10 +108,12 @@ pub fn queue_open(app: &AppHandle, paths: Vec<PathBuf>) {
 }
 
 /// File paths from a command line (the first argument is the program), relative to `cwd`.
-pub fn paths_from_args(args: Vec<String>, cwd: &Path) -> Vec<PathBuf> {
+/// Takes `OsString`s (`std::env::args_os`), so names that are not valid Unicode do not panic.
+pub fn paths_from_args<S: Into<OsString>>(args: impl IntoIterator<Item = S>, cwd: &Path) -> Vec<PathBuf> {
     args.into_iter()
         .skip(1)
-        .filter(|arg| !arg.is_empty() && !arg.starts_with('-'))
+        .map(Into::into)
+        .filter(|arg: &OsString| !arg.is_empty() && !arg.to_string_lossy().starts_with('-'))
         .map(|arg| {
             let path = PathBuf::from(arg);
             if path.is_absolute() { path } else { cwd.join(path) }
@@ -128,10 +149,86 @@ fn with_filters<R: tauri::Runtime>(
     filters: &[Filter],
 ) -> tauri_plugin_dialog::FileDialogBuilder<R> {
     for filter in filters {
-        let extensions: Vec<&str> = filter.extensions.iter().map(String::as_str).collect();
+        let extensions = filter_extensions(&filter.extensions);
+        let extensions: Vec<&str> = extensions.iter().map(String::as_str).collect();
         dialog = dialog.add_filter(&filter.name, &extensions);
     }
     dialog
+}
+
+/// GTK file filters are case-sensitive: also list the upper-case extensions there (E.PLT, PLAN.DWG).
+fn filter_extensions(extensions: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = extensions.to_vec();
+    if cfg!(target_os = "linux") {
+        for ext in extensions {
+            let upper = ext.to_uppercase();
+            if upper != *ext && !out.contains(&upper) {
+                out.push(upper);
+            }
+        }
+    }
+    out
+}
+
+/// A file name that is safe on every platform: no `\ / : * ? " < > |` or control characters,
+/// no trailing dots or spaces, not a reserved Windows device name (CON, PRN, AUX, NUL, COM1-9,
+/// LPT1-9, also with an extension), at most 150 characters; `fallback` when nothing is left.
+pub fn safe_file_name(name: &str, fallback: &str) -> String {
+    let mut clean: String = name
+        .chars()
+        .map(|c| if c.is_control() || "<>:\"/\\|?*".contains(c) { '_' } else { c })
+        .take(150)
+        .collect();
+    clean = clean.trim().trim_end_matches(['.', ' ']).to_string();
+    if clean.is_empty() || clean.chars().all(|c| c == '.') {
+        clean = fallback.to_string();
+    }
+    let stem = clean.split('.').next().unwrap_or("").to_ascii_uppercase();
+    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ((stem.starts_with("COM") || stem.starts_with("LPT")) && stem.len() == 4 && stem.as_bytes()[3].is_ascii_digit());
+    if reserved {
+        clean.insert(0, '_');
+    }
+    clean
+}
+
+/// Adds the filter's extension to a name typed without one (or with another): "plan" -> "plan.pdf".
+fn with_extension(path: PathBuf, filters: &[Filter]) -> PathBuf {
+    let wanted: Vec<&str> = filters.iter().flat_map(|f| f.extensions.iter().map(String::as_str)).filter(|e| *e != "*").collect();
+    let Some(first) = wanted.first() else { return path };
+    let has = path.extension().and_then(|e| e.to_str()).is_some_and(|e| wanted.iter().any(|w| w.eq_ignore_ascii_case(e)));
+    if has {
+        return path;
+    }
+    let mut name = path.as_os_str().to_owned();
+    name.push(".");
+    name.push(first);
+    PathBuf::from(name)
+}
+
+const LAST_DIR_FILE: &str = "last-save-folder.txt";
+
+/// Folder the Save dialog starts in: the open drawing's folder when the page knows it, otherwise
+/// the folder of the last save (this run, or an earlier one).
+fn save_folder(app: &AppHandle, session: &Session, page_dir: Option<PathBuf>) -> Option<PathBuf> {
+    if let Some(dir) = page_dir.filter(|d| d.is_dir()) {
+        return Some(dir);
+    }
+    let mut last = lock(&session.last_dir);
+    if last.is_none() {
+        let file = app.path().app_data_dir().ok()?.join(LAST_DIR_FILE);
+        *last = std::fs::read_to_string(file).ok().map(|s| PathBuf::from(s.trim()));
+    }
+    last.clone().filter(|d| d.is_dir())
+}
+
+fn remember_folder(app: &AppHandle, session: &Session, path: &Path) {
+    let Some(dir) = path.parent() else { return };
+    *lock(&session.last_dir) = Some(dir.to_path_buf());
+    if let (Ok(data), Some(text)) = (app.path().app_data_dir(), dir.to_str()) {
+        let _ = std::fs::create_dir_all(&data);
+        let _ = std::fs::write(data.join(LAST_DIR_FILE), text);
+    }
 }
 
 pub fn path_string(path: &Path) -> Result<String, String> {
@@ -186,10 +283,21 @@ pub async fn read_file(app: AppHandle, path: String) -> Result<Response, String>
     }
 }
 
-/// Paths waiting to be opened (see `queue_open`).
+/// Files waiting to be opened (see `queue_open`), and messages about files that cannot be.
+#[derive(Serialize)]
+pub struct Pending {
+    paths: Vec<String>,
+    errors: Vec<String>,
+}
+
+/// Collected by the page when it starts and on `open-pending`, so nothing queued before the
+/// page was ready (command line, second launch) is lost.
 #[tauri::command]
-pub fn take_pending(session: State<'_, Session>) -> Vec<String> {
-    lock(&session.pending).drain(..).filter_map(|p| path_string(&p).ok()).collect()
+pub fn take_pending(session: State<'_, Session>) -> Pending {
+    Pending {
+        paths: lock(&session.pending).drain(..).filter_map(|p| path_string(&p).ok()).collect(),
+        errors: lock(&session.errors).drain(..).collect(),
+    }
 }
 
 /// A percent-encoded request header (file names may contain any character).
@@ -213,19 +321,25 @@ fn body<'a>(request: &'a Request<'_>) -> Result<&'a [u8], String> {
 }
 
 /// Asks where to save (native Save dialog) and writes the bytes sent as the request body.
-/// Headers: `x-file-name` (suggested name) and `x-filters` (JSON list of filters), percent-encoded.
-/// Resolves to the saved path, or null when cancelled.
+/// Headers (percent-encoded): `x-file-name` (suggested name), `x-filters` (JSON list of filters),
+/// optional `x-directory` (the open drawing's folder). A name typed without the filter's
+/// extension gets it. Resolves to the saved path, or null when cancelled.
 #[tauri::command]
-pub async fn save_file(window: WebviewWindow, session: State<'_, Session>, request: Request<'_>) -> Result<Option<String>, String> {
+pub async fn save_file(app: AppHandle, window: WebviewWindow, session: State<'_, Session>, request: Request<'_>) -> Result<Option<String>, String> {
     let bytes = body(&request)?;
-    let name = header(&request, "x-file-name")?;
+    let name = safe_file_name(&header(&request, "x-file-name")?, "drawing");
     let filters: Vec<Filter> = serde_json::from_str(&header(&request, "x-filters")?).map_err(|e| e.to_string())?;
-    let dialog = with_filters(window.dialog().file().set_parent(&window).set_file_name(name), &filters);
+    let page_dir = header(&request, "x-directory").ok().filter(|d| !d.is_empty()).map(PathBuf::from);
+    let mut dialog = with_filters(window.dialog().file().set_parent(&window).set_file_name(name), &filters);
+    if let Some(dir) = save_folder(&app, &session, page_dir) {
+        dialog = dialog.set_directory(dir);
+    }
     let Some(chosen) = dialog.blocking_save_file() else {
         return Ok(None);
     };
-    let path = chosen.into_path().map_err(|e| e.to_string())?;
+    let path = with_extension(chosen.into_path().map_err(|e| e.to_string())?, &filters);
     std::fs::write(&path, bytes).map_err(|e| format!("Could not save {}: {e}", path.display()))?;
+    remember_folder(&app, &session, &path);
     // A drawing saved here can be saved again (Ctrl+S) without the dialog.
     session.allow(&path);
     path_string(&path).map(Some)
@@ -260,43 +374,46 @@ fn write_replacing(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// A file name that is safe on every platform, ending in `.pdf`.
 fn safe_pdf_name(name: &str) -> String {
     let stem = name.strip_suffix(".pdf").or_else(|| name.strip_suffix(".PDF")).unwrap_or(name);
-    let mut clean: String = stem
-        .chars()
-        .map(|c| if c.is_control() || "<>:\"/\\|?*".contains(c) { '_' } else { c })
-        .take(100)
-        .collect();
-    clean = clean.trim_matches(|c: char| c == '.' || c.is_whitespace()).to_string();
-    if clean.is_empty() {
-        clean = "drawing".into();
+    format!("{}.pdf", safe_file_name(stem, "drawing"))
+}
+
+/// Writes `bytes` to a new file in `dir` named `name`, or `name (2)`, `name (3)`… when it
+/// exists (a PDF app may still hold an earlier copy). Existing files are never overwritten
+/// or followed (symbolic links), so other users and processes cannot redirect the write.
+fn write_new_file(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
+    let (stem, ext) = name.rsplit_once('.').map_or((name, ""), |(s, e)| (s, e));
+    let mut last = None;
+    for n in 1..=50 {
+        let file = match (n, ext) {
+            (1, _) => name.to_string(),
+            (_, "") => format!("{stem} ({n})"),
+            _ => format!("{stem} ({n}).{ext}"),
+        };
+        let path = dir.join(file);
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut f) => return f.write_all(bytes).map(|()| path),
+            Err(err) => last = Some(err),
+        }
     }
-    format!("{clean}.pdf")
+    Err(last.unwrap_or_else(|| ErrorKind::AlreadyExists.into()))
 }
 
 /// Prints a PDF by handing it to the system's PDF app (Edge, Acrobat, Evince…), whose
 /// print dialog offers all printers, paper sizes and "actual size" scaling.
-/// The PDF is written to a ProtoCAD folder in the temp directory; files older than a day are removed.
+/// The PDF goes to a `print` folder in the user's own app cache folder (not the shared temp
+/// folder); files older than a day are removed.
 #[tauri::command]
 pub async fn print_pdf(app: AppHandle, request: Request<'_>) -> Result<(), String> {
     let bytes = body(&request)?;
     let name = safe_pdf_name(&header(&request, "x-file-name")?);
-    let dir = std::env::temp_dir().join("ProtoCAD Viewer");
+    let dir = app.path().app_cache_dir().map_err(|e| e.to_string())?.join("print");
     std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
     remove_old_files(&dir, Duration::from_secs(24 * 3600));
-    // A PDF app may still have an earlier copy open (and locked), so try numbered names too.
-    let mut last_err = None;
-    for n in 1..=20 {
-        let path = if n == 1 { dir.join(&name) } else { dir.join(format!("{} ({n}).pdf", name.trim_end_matches(".pdf"))) };
-        match std::fs::write(&path, bytes) {
-            Ok(()) => {
-                return app.opener().open_path(path_string(&path)?, None::<&str>).map_err(|err| {
-                    eprintln!("Could not open {}: {err}", path.display());
-                    "No app for PDF files was found to print with. Save the PDF and print it from a PDF reader.".to_string()
-                });
-            }
-            Err(err) => last_err = Some(err),
-        }
-    }
-    Err(format!("Could not write the PDF to {}: {}", dir.display(), last_err.map_or_else(String::new, |e| e.to_string())))
+    let path = write_new_file(&dir, &name, bytes).map_err(|e| format!("Could not write the PDF to {}: {e}", dir.display()))?;
+    app.opener().open_path(path_string(&path)?, None::<&str>).map_err(|err| {
+        eprintln!("Could not open {}: {err}", path.display());
+        "No app for PDF files was found to print with. Save the PDF and print it from a PDF reader.".to_string()
+    })
 }
 
 fn remove_old_files(dir: &Path, age: Duration) {
@@ -321,8 +438,58 @@ mod tests {
     #[test]
     fn args_skip_program_and_flags_and_resolve_relative_paths() {
         let cwd = Path::new("/work");
-        let args = vec!["app".into(), "--flag".into(), "a.dwg".into(), "/abs/b.pdf".into(), String::new()];
+        let args: Vec<String> = vec!["app".into(), "--flag".into(), "a.dwg".into(), "/abs/b.pdf".into(), String::new()];
         assert_eq!(paths_from_args(args, cwd), vec![PathBuf::from("/work/a.dwg"), PathBuf::from("/abs/b.pdf")]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_unicode_arguments_do_not_panic() {
+        use std::os::unix::ffi::OsStringExt;
+        let bad = OsString::from_vec(b"/tmp/plan\xff.dwg".to_vec());
+        let paths = paths_from_args(vec![OsString::from("app"), bad.clone()], Path::new("/"));
+        assert_eq!(paths, vec![PathBuf::from(bad)]);
+        assert!(paths[0].to_str().is_none());
+    }
+
+    #[test]
+    fn file_names_are_made_safe() {
+        assert_eq!(safe_file_name("plant - Layout: A/B", "x"), "plant - Layout_ A_B");
+        assert_eq!(safe_file_name("CON", "x"), "_CON");
+        assert_eq!(safe_file_name("nul.pdf", "x"), "_nul.pdf");
+        assert_eq!(safe_file_name("COM1.csv", "x"), "_COM1.csv");
+        assert_eq!(safe_file_name("COMPANY.pdf", "x"), "COMPANY.pdf");
+        assert_eq!(safe_file_name("LPT", "x"), "LPT");
+        assert_eq!(safe_file_name(" ... ", "drawing"), "drawing");
+        assert_eq!(safe_file_name("مخطط.dxf", "x"), "مخطط.dxf");
+    }
+
+    #[test]
+    fn typed_names_get_the_filter_extension() {
+        let filters = vec![Filter { name: "PDF".into(), extensions: vec!["pdf".into()] }];
+        assert_eq!(with_extension(PathBuf::from("/d/noext"), &filters), PathBuf::from("/d/noext.pdf"));
+        assert_eq!(with_extension(PathBuf::from("/d/plan.PDF"), &filters), PathBuf::from("/d/plan.PDF"));
+        assert_eq!(with_extension(PathBuf::from("/d/plan.v2"), &filters), PathBuf::from("/d/plan.v2.pdf"));
+        let any = vec![Filter { name: "All".into(), extensions: vec!["*".into()] }];
+        assert_eq!(with_extension(PathBuf::from("/d/x"), &any), PathBuf::from("/d/x"));
+    }
+
+    #[test]
+    fn print_files_are_new_files() {
+        let dir = std::env::temp_dir().join(format!("protocad-print-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = write_new_file(&dir, "plan.pdf", b"1").unwrap();
+        let b = write_new_file(&dir, "plan.pdf", b"2").unwrap();
+        assert_eq!(a.file_name().unwrap(), "plan.pdf");
+        assert_eq!(b.file_name().unwrap(), "plan (2).pdf");
+        assert_eq!(std::fs::read(&a).unwrap(), b"1");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_filters_also_match_upper_case() {
+        assert_eq!(filter_extensions(&["dwg".into(), "plt".into()]), vec!["dwg", "plt", "DWG", "PLT"]);
     }
 
     #[test]

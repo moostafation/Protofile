@@ -9,6 +9,4 @@ Icon={{icon}}
 Name={{name}}
 Terminal=false
 Type=Application
-{{#if mime_type}}
-MimeType={{mime_type}}
-{{/if}}
+MimeType={{#if mime_type}}{{mime_type}};{{/if}}application/pdf;image/png;image/jpeg;image/gif;image/bmp;image/webp;image/svg+xml;image/tiff;

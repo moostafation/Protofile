@@ -9,6 +9,7 @@ fn main() {
         "write_file",
         "set_modified",
         "close_window",
+        "set_theme_menu",
         "print_pdf",
         "recent_files",
         "add_recent",

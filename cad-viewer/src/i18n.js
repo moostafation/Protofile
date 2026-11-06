@@ -161,7 +161,7 @@ const STRINGS = {
   realDistance: 'Real distance between the two points',
   calMeasured: 'Measured on the sheet',
   apply: 'Apply',
-  oneFileAtATime: 'Only one file opens at a time; the first dropped file was opened.',
+  oneFileAtATime: 'Only one file opens at a time; the first one was opened.',
   pagesCurrent: 'Current page',
   pagesAll: 'All pages',
   pagesAllCount: '{n} pages (the preview shows the current one)',

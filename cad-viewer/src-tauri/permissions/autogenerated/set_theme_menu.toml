@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-theme-menu"
+description = "Enables the set_theme_menu command without any pre-configured scope."
+commands.allow = ["set_theme_menu"]
+
+[[permission]]
+identifier = "deny-set-theme-menu"
+description = "Denies the set_theme_menu command without any pre-configured scope."
+commands.deny = ["set_theme_menu"]

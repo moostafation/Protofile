@@ -7,9 +7,13 @@ const RTL = /[֐-ࣿיִ-﷿ﹰ-﻿]/;
 const LTR = /[A-Za-z0-9À-ɏͰ-ϿЀ-ӿ]/;
 const MARKS = /[̀-ͯؐ-ًؚ-ٰٟۖ-ۭـ]/g;
 
-/** Text form used for matching: NFKC, lower case, without diacritics, tatweel or repeated spaces. */
+// Zero-width non-joiner/joiner/space, word joiner and BOM: Persian writes "میلی‌متر" with a ZWNJ,
+// while a typed query often has none (or the other way round).
+const ZERO_WIDTH = /[\u200b-\u200d\u2060\ufeff]/g;
+
+/** Text form used for matching: NFKC, lower case, without diacritics, tatweel, zero-width joiners or repeated spaces. */
 export function searchKey(s) {
-  return s.normalize('NFKC').toLowerCase().normalize('NFKD').replace(MARKS, '').replace(/\s+/g, ' ');
+  return s.normalize('NFKC').toLowerCase().normalize('NFKD').replace(MARKS, '').replace(ZERO_WIDTH, '').replace(/\s+/g, ' ');
 }
 
 const display = (s) => s.normalize('NFKC').replace(/\s+/g, ' ');

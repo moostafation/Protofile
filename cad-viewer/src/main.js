@@ -319,6 +319,7 @@ async function openFile(file) {
     } else {
       setSheetDoc(result.kind, result.sheet);
     }
+    state.doc.path = file.path ?? null;
     updateTitle();
     return true;
   } catch (err) {
@@ -341,9 +342,11 @@ async function openDiskFile(file) {
 }
 
 /** Files handed over by the system (drag & drop, double-click, Open with): the first one opens. */
-function openHandedFiles(files) {
-  (platform.isDesktop ? openDiskFile : openFile)(files[0]);
-  if (files.length > 1) toast(t('oneFileAtATime'), false, 5000);
+function openHandedFiles(files, errors = []) {
+  if (files.length) (platform.isDesktop ? openDiskFile : openFile)(files[0]);
+  const notes = [...errors];
+  if (files.length > 1) notes.push(t('oneFileAtATime'));
+  if (notes.length) toast(notes.join(' '), errors.length > 0, errors.length ? 10000 : 5000);
 }
 
 /** File type filters of the desktop Open dialog, from the format registry. */
@@ -1514,6 +1517,7 @@ $('#settingsDialog').addEventListener('close', () => {
   state.theme = $('#sTheme').value;
   state.showLw = $('#sLw').checked;
   saveUiPrefs();
+  platform.setThemeMenu(state.theme);
   assistant.saveSettings({ apiKey: $('#sKey').value.trim(), model: $('#sModel').value, effort: $('#sEffort').value });
   viewer.setTheme(THEMES[state.theme]);
   toast(t('saved'));
@@ -1659,12 +1663,24 @@ const csvFilters = () => [{ name: t('csvFile'), extensions: ['csv'] }];
 /** Saves an export: Save dialog on desktop (then says where it went), a download on the web. */
 async function saveAs(blob, name, filters) {
   try {
-    const path = await platform.saveFile(blob, name, filters);
+    const path = await platform.saveFile(blob, name, filters, { directory: docFolder() });
     if (path) toast(`${t('savedTo')} ${path}`, false, 6000);
   } catch (err) {
     console.error(err);
-    toast(`${t('saveFailed')}: ${err?.message || err}`, true, 7000);
+    toast(saveError(err), true, 7000);
   }
+}
+
+/** Folder of the open file (desktop), where Save dialogs start. */
+function docFolder() {
+  const p = state.doc?.path;
+  return p ? p.slice(0, Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))) || null : null;
+}
+
+/** "Could not save the file: …", without repeating it when the message already says so. */
+function saveError(err) {
+  const msg = err?.message || String(err);
+  return /^could not (save|write)/i.test(msg) ? msg : `${t('saveFailed')}: ${msg}`;
 }
 
 $('#printOptions').addEventListener('change', (ev) => {
@@ -1807,6 +1823,13 @@ $('#fileInput').addEventListener('change', (ev) => {
   if (f) openFile(f);
 });
 
+/** Reload, print, find, find-next and view-source keys of the webview (desktop program). */
+function isBrowserShortcut(ev) {
+  const k = ev.key.toLowerCase();
+  if (ev.key === 'F5' || (ev.key === 'F3' && state.doc?.kind !== 'cad')) return true;
+  return (ev.ctrlKey || ev.metaKey) && !ev.altKey && ['r', 'p', 'f', 'g', 'u'].includes(k);
+}
+
 /** Printable keys that start typing into the command line. */
 const TYPABLE = /^[\w@.,<>+\-#%:/\\* ]$/;
 
@@ -1821,6 +1844,9 @@ document.addEventListener('keydown', (ev) => {
   const cad = state.doc?.kind === 'cad';
   const inField = !!ev.target.closest('input, textarea, select');
   const cmdLine = ev.target.id === 'cmdInput';
+  // Desktop: the webview's own browser shortcuts (reload loses the drawing; print/find open
+  // WebView2's dialogs) never run. Ctrl+P and Ctrl+F still reach the app's actions below.
+  if (platform.isDesktop && isBrowserShortcut(ev)) ev.preventDefault();
   // Ctrl/Cmd shortcuts work everywhere except inside dialogs, and before the single-key ones.
   const mod = ev.ctrlKey || ev.metaKey;
   if (mod && !ev.altKey && !ev.target.closest('dialog')) {
@@ -1924,12 +1950,12 @@ async function doSave(saveAs) {
       await platform.writeFile(doc.path, blob);
       path = doc.path;
     } else {
-      path = await platform.saveFile(blob, name, dxfFilters());
+      path = await platform.saveFile(blob, name, dxfFilters(), { directory: docFolder() });
       if (path === null) return false; // cancelled
     }
   } catch (err) {
     console.error(err);
-    toast(`${t('saveFailed')}: ${err?.message || err}`, true, 7000);
+    toast(saveError(err), true, 7000);
     return false;
   }
   if (path) {
@@ -2028,6 +2054,7 @@ function setTheme(name) {
   state.theme = name;
   saveUiPrefs();
   viewer.setTheme(THEMES[name]);
+  platform.setThemeMenu(name);
 }
 
 /** Help > Supported formats: what opens, and what is recognised with export advice. */
@@ -2064,6 +2091,7 @@ function renderRecent(paths) {
 function initDesktop() {
   document.documentElement.classList.add('desktop');
   platform.onMenu(onMenu);
+  platform.setThemeMenu(state.theme);
   platform.onRecentChange(renderRecent);
   platform.recentFiles().then(renderRecent, (err) => console.warn(err));
   $('#recentClear').addEventListener('click', () => platform.clearRecent());

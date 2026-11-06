@@ -1,8 +1,10 @@
 //! The native menu bar. Items that act on the drawing are sent to the page as a `menu`
 //! event carrying the item id; the page runs the same action as its toolbar.
 
-use tauri::menu::{AboutMetadata, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu, SubmenuBuilder};
-use tauri::{AppHandle, Emitter, Wry};
+use std::sync::Mutex;
+
+use tauri::menu::{AboutMetadata, CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu, SubmenuBuilder};
+use tauri::{AppHandle, Emitter, Manager, State, Wry};
 
 use crate::{files, recent};
 
@@ -10,8 +12,25 @@ fn item(app: &AppHandle, id: &str, text: &str, accelerator: Option<&str>) -> tau
     MenuItem::with_id(app, id, text, true, accelerator)
 }
 
-/// Builds the menu bar; returns it with the File > Open Recent submenu (filled later).
-pub fn build(app: &AppHandle) -> tauri::Result<(Menu<Wry>, Submenu<Wry>)> {
+/// View > Theme items: checked for the active theme (`theme:dark`, `theme:light`, `theme:mono`).
+pub struct ThemeMenu(Mutex<Vec<CheckMenuItem<Wry>>>);
+
+impl ThemeMenu {
+    fn check(&self, id: &str) {
+        for item in crate::files::lock(&self.0).iter() {
+            let _ = item.set_checked(item.id().as_ref() == id);
+        }
+    }
+}
+
+/// The page tells which theme is active (at start and when it changes in Settings).
+#[tauri::command]
+pub fn set_theme_menu(themes: State<'_, ThemeMenu>, theme: String) {
+    themes.check(&format!("theme:{theme}"));
+}
+
+/// Builds the menu bar; returns it with the File > Open Recent submenu (filled later) and the theme items.
+pub fn build(app: &AppHandle) -> tauri::Result<(Menu<Wry>, Submenu<Wry>, ThemeMenu)> {
     let info = app.package_info();
     let about = PredefinedMenuItem::about(
         app,
@@ -40,11 +59,12 @@ pub fn build(app: &AppHandle) -> tauri::Result<(Menu<Wry>, Submenu<Wry>)> {
     }
     let file = file.build()?;
 
-    let theme = SubmenuBuilder::new(app, "&Theme")
-        .text("theme:dark", "&Dark")
-        .text("theme:light", "&Light")
-        .text("theme:mono", "&Monochrome")
-        .build()?;
+    let themes = vec![
+        CheckMenuItem::with_id(app, "theme:dark", "&Dark", true, true, None::<&str>)?,
+        CheckMenuItem::with_id(app, "theme:light", "&Light", true, false, None::<&str>)?,
+        CheckMenuItem::with_id(app, "theme:mono", "&Monochrome", true, false, None::<&str>)?,
+    ];
+    let theme = SubmenuBuilder::new(app, "&Theme").item(&themes[0]).item(&themes[1]).item(&themes[2]).build()?;
     let view = SubmenuBuilder::new(app, "&View")
         .item(&item(app, "zoom-extents", "Zoom &Extents", None)?)
         .item(&item(app, "zoom-in", "Zoom &In", Some("CmdOrCtrl+="))?)
@@ -77,7 +97,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<(Menu<Wry>, Submenu<Wry>)> {
     #[cfg(not(target_os = "macos"))]
     let menu = Menu::with_items(app, &[&file, &view, &help])?;
 
-    Ok((menu, recent))
+    Ok((menu, recent, ThemeMenu(Mutex::new(themes))))
 }
 
 pub fn on_event(app: &AppHandle, event: MenuEvent) {
@@ -93,6 +113,10 @@ pub fn on_event(app: &AppHandle, event: MenuEvent) {
             if let Some(index) = id.strip_prefix("recent:").and_then(|i| i.parse().ok()) {
                 recent::open_entry(app, index);
             } else {
+                // Theme items behave as radio items (GTK and Windows toggle only the clicked one).
+                if id.starts_with("theme:") {
+                    app.state::<ThemeMenu>().check(id);
+                }
                 let _ = app.emit("menu", id);
             }
         }

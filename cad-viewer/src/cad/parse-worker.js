@@ -27,6 +27,8 @@ self.onmessage = async (ev) => {
       const lib = await libredwg();
       try {
         db = readDwg(lib, buffer);
+        // Opened despite critical LibreDWG errors: do not reuse a module that may be damaged.
+        if (db.warnings?.includes('dwgErrors')) libPromise = null;
       } catch (err) {
         // A failed parse can leave the WebAssembly module in a bad state: use a fresh one next time.
         libPromise = null;
