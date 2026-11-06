@@ -328,9 +328,11 @@ export class CadRenderer {
   drawItems(ctx, view, items, color, widthPx = 3) {
     const px = 1 / view.scale;
     const scene = this.scene;
-    let h = this.highlight?.items === items && this.highlight.version === scene.version ? this.highlight : null;
+    this.highlight ??= new WeakMap();
+    let h = this.highlight.get(items);
+    if (h && h.version !== scene.version) h = null;
     if (!h) {
-      h = { items, version: scene.version, strokes: new Path2D(), fills: new Path2D(), texts: [], points: [], boxes: [] };
+      h = { version: scene.version, strokes: new Path2D(), fills: new Path2D(), texts: [], points: [], boxes: [] };
       for (const i of items) {
         const it = scene.items[i];
         if (!it || it.deleted) continue;
@@ -344,8 +346,7 @@ export class CadRenderer {
         }
         if (it.bb && Number.isFinite(it.bb[0])) h.boxes.push(it.bb);
       }
-      // Two highlight lists are shown at a time (selection and search hits): keep the last one only.
-      this.highlight = h;
+      this.highlight.set(items, h);
     }
     ctx.save();
     ctx.strokeStyle = color;
