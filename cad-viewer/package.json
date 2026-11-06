@@ -18,8 +18,11 @@
     "@mlightcad/libredwg-web": "0.7.17",
     "@tauri-apps/api": "2.12.4",
     "jspdf": "^4.2.1",
+    "occt-import-js": "0.0.23",
     "pdfjs-dist": "^6.4.299",
-    "utif2": "4.1.0"
+    "three": "0.186.1",
+    "utif2": "4.1.0",
+    "web-ifc": "0.0.78"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.12.4",
