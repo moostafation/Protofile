@@ -1,6 +1,6 @@
 // Normalizes a DwgDatabase (from libredwg-web) or the DXF parser's equivalent
 // into a Drawing: resolved layers, linetypes, blocks and spaces.
-import { aciToRgb, FOREGROUND } from './aci.js';
+import { aciToRgb, nearestAci, FOREGROUND } from './aci.js';
 
 // DWG stores lineweights as an index into this table (1/100 mm).
 const DWG_LW = [0, 5, 9, 13, 15, 18, 20, 25, 30, 35, 40, 50, 53, 60, 70, 80, 90, 100, 106, 120, 140, 158, 200, 211];
@@ -27,6 +27,32 @@ export function lineweightToMm(raw, source) {
   return raw / 100;
 }
 
+/**
+ * Raw lineweight value for an entity of a drawing from `source` (the inverse of
+ * lineweightToMm): DWG index or DXF 1/100 mm. `lw` is mm or one of the LW_* markers.
+ */
+export function lineweightToRaw(lw, source) {
+  if (source === 'dwg') {
+    if (lw === LW_BYLAYER) return 29;
+    if (lw === LW_BYBLOCK) return 30;
+    if (lw === LW_DEFAULT || lw < 0) return 31;
+    return nearestIndex(lw * 100);
+  }
+  if (lw === LW_BYLAYER) return -1;
+  if (lw === LW_BYBLOCK) return -2;
+  if (lw === LW_DEFAULT || lw < 0) return -3;
+  return DWG_LW[nearestIndex(lw * 100)];
+}
+
+function nearestIndex(v) {
+  let best = 0;
+  for (let i = 1; i < DWG_LW.length; i++) if (Math.abs(DWG_LW[i] - v) < Math.abs(DWG_LW[best] - v)) best = i;
+  return best;
+}
+
+/** Standard lineweights in mm (the values AutoCAD offers). */
+export const LINEWEIGHTS_MM = DWG_LW.map((v) => v / 100);
+
 export const UNIT_NAMES = {
   0: '', 1: 'in', 2: 'ft', 3: 'mi', 4: 'mm', 5: 'cm', 6: 'm', 7: 'km', 8: 'µin', 9: 'mil', 10: 'yd',
   11: 'Å', 12: 'nm', 13: 'µm', 14: 'dm', 15: 'dam', 16: 'hm', 17: 'Gm', 18: 'AU', 19: 'ly', 20: 'pc',
@@ -46,6 +72,24 @@ function layerColor(l, source) {
   return aciToRgb(l.colorIndex);
 }
 
+/** ACI index (1..255) and true colour (0xRRGGBB or null) of a layer, as written to DXF. */
+function layerColorCodes(l, source) {
+  const ci = Math.abs(l.colorIndex ?? 7);
+  if (source === 'dwg') {
+    if (ci >= 1 && ci <= 255) return { aci: ci, trueColor: null };
+    if (typeof l.color === 'number') return { aci: nearestAci(l.color), trueColor: l.color };
+    return { aci: 7, trueColor: null };
+  }
+  if (typeof l.color === 'number') return { aci: ci >= 1 && ci <= 255 ? ci : nearestAci(l.color), trueColor: l.color };
+  return { aci: ci >= 1 && ci <= 255 ? ci : 7, trueColor: null };
+}
+
+/** Rgb shown for a layer colour given as ACI + optional true colour. */
+export function layerRgb(aci, trueColor) {
+  if (typeof trueColor === 'number') return trueColor === 0xffffff ? FOREGROUND : trueColor;
+  return aciToRgb(aci);
+}
+
 /**
  * @param {object} db DwgDatabase-like object
  * @param {'dwg'|'dxf'|'dgn'|'hpgl'} source (only DWG encodes lineweights differently)
@@ -58,9 +102,11 @@ export function buildDrawing(db, source, fileName) {
     layers.set(l.name, {
       name: l.name,
       rgb: layerColor(l, source),
+      ...layerColorCodes(l, source),
       on: !l.off && !(l.colorIndex < 0),
       frozen: !!l.frozen,
-      locked: !!l.locked,
+      // LibreDWG's converter does not read the lock flag (it reports every layer locked): use the flags.
+      locked: source === 'dwg' ? !!((l.standardFlag ?? 0) & 4) : !!l.locked,
       lw,
       ltype: l.lineType || 'Continuous',
       plot: l.plotFlag !== 0,
@@ -69,7 +115,7 @@ export function buildDrawing(db, source, fileName) {
     });
   }
   if (!layers.has('0')) {
-    layers.set('0', { name: '0', rgb: FOREGROUND, on: true, frozen: false, locked: false, lw: LW_DEFAULT, ltype: 'Continuous', plot: true, visible: true, count: 0 });
+    layers.set('0', { name: '0', rgb: FOREGROUND, aci: 7, trueColor: null, on: true, frozen: false, locked: false, lw: LW_DEFAULT, ltype: 'Continuous', plot: true, visible: true, count: 0 });
   }
 
   const ltypes = new Map();
@@ -96,20 +142,21 @@ export function buildDrawing(db, source, fileName) {
     modelEntities = (db.entities ?? []).filter((e) => !e.isInPaperSpace && !paperHandles.has(e.ownerBlockRecordSoftId));
   }
 
-  // Layouts (paper space), sorted by tab order, skipping "Model".
-  const layouts = [];
+  // Layouts (paper space), sorted by tab order, skipping "Model". `layoutDefs` keeps every
+  // layout (also empty ones) for saving; `layouts` only the ones with something to show.
+  const layoutDefs = [];
   for (const lo of db.objects?.LAYOUT ?? []) {
     if (/^model$/i.test(lo.layoutName)) continue;
     const block = blockByHandle.get(lo.paperSpaceTableId);
-    if (!block) continue;
+    if (!block || layoutDefs.some((l) => l.block === block)) continue;
     const entities = block.entities.length
       ? block.entities
       : (db.entities ?? []).filter((e) => e.ownerBlockRecordSoftId === block.handle);
-    // Layouts with nothing drawable (e.g. only the sheet's own overall viewport) get no tab.
-    if (!entities.some((e) => !(e.type === 'VIEWPORT' && e.viewportId === 1))) continue;
-    layouts.push({ name: lo.layoutName, tabOrder: lo.tabOrder ?? 0, entities, limits: [lo.minLimit, lo.maxLimit] });
+    layoutDefs.push({ name: lo.layoutName, tabOrder: lo.tabOrder ?? 0, entities, block, limits: [lo.minLimit, lo.maxLimit] });
   }
-  layouts.sort((a, b) => a.tabOrder - b.tabOrder);
+  layoutDefs.sort((a, b) => a.tabOrder - b.tabOrder);
+  // Layouts with nothing drawable (e.g. only the sheet's own overall viewport) get no tab.
+  const layouts = layoutDefs.filter((l) => l.entities.some((e) => !(e.type === 'VIEWPORT' && e.viewportId === 1)));
 
   // Tables are drawn from their anonymous *T block. Newer DWG versions may not link the
   // block, so unlinked tables take the unclaimed *T blocks in handle order.
@@ -144,5 +191,10 @@ export function buildDrawing(db, source, fileName) {
     blockByHandle,
     modelEntities,
     layouts,
+    layoutDefs,
+    // Text and dimension styles and registered applications, kept for saving as DXF.
+    styles: db.tables?.STYLE?.entries ?? [],
+    dimstyles: db.tables?.DIMSTYLE?.entries ?? [],
+    appids: db.tables?.APPID?.entries ?? [],
   };
 }

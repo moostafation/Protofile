@@ -48,3 +48,16 @@ export function luminance(rgb) {
   const r = (rgb >> 16) & 255, g = (rgb >> 8) & 255, b = rgb & 255;
   return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
 }
+
+/** Closest ACI index (1..255) to an 0xRRGGBB colour. */
+export function nearestAci(rgb) {
+  if (typeof rgb !== 'number' || rgb < 0) return 7;
+  const r = (rgb >> 16) & 255, g = (rgb >> 8) & 255, b = rgb & 255;
+  let best = 7, bestD = Infinity;
+  for (let i = 1; i < 256; i++) {
+    const c = ACI[i];
+    const d = (((c >> 16) & 255) - r) ** 2 + (((c >> 8) & 255) - g) ** 2 + ((c & 255) - b) ** 2;
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return best;
+}

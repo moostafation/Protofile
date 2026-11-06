@@ -19,8 +19,38 @@ function attribsOf(e) {
   return (e.attribs ?? []).map((a) => ({ tag: a.tag || '', value: decodeText(a.text?.text ?? '') })).filter((a) => a.value);
 }
 
-/** Builds analysis data for a scene (model space or layout). */
-export function analyze(drawing, scene) {
+const LINEWORK = new Set(['LINE', 'LWPOLYLINE', 'POLYLINE2D', 'POLYLINE3D', 'ARC', 'SPLINE', 'CIRCLE', 'ELLIPSE']);
+
+/**
+ * Per-item data used by the panels, search and the AI (text, block name, attributes,
+ * linework length). Called for every item once, and again for items an edit rebuilt.
+ */
+export function annotateItem(scene, it) {
+  const e = it.ent;
+  delete it.text; delete it.attribs; delete it.name; delete it.length;
+  if (it.deleted) return;
+  if (e.type === 'INSERT') {
+    it.attribs = attribsOf(e);
+    it.name = e.name;
+  } else if (!e.type?.includes('DIMENSION')) {
+    const t = itemText(e);
+    if (t.trim()) it.text = t;
+  }
+  if (LINEWORK.has(e.type)) {
+    let len = 0;
+    for (let k = it.first; k < it.last; k++) {
+      const p = scene.prims[k];
+      if (p.k === STROKE && !p.infinite && !p.dead) len += polylineLength(p.pts, p.closed);
+    }
+    it.length = len;
+  }
+}
+
+/**
+ * Builds analysis data for a scene (model space or layout). `annotate` false reuses the
+ * per-item data (see annotateItem), so only the totals are recomputed after an edit.
+ */
+export function analyze(drawing, scene, annotate = true) {
   const layerStats = new Map();
   const stat = (name) => {
     let s = layerStats.get(name);
@@ -32,15 +62,15 @@ export function analyze(drawing, scene) {
   const dims = [];
 
   for (const it of scene.items) {
+    if (annotate) annotateItem(scene, it);
+    if (it.deleted) continue;
     const e = it.ent;
     const s = stat(it.layer);
     s.entities++;
     s.types[e.type] = (s.types[e.type] || 0) + 1;
 
     if (e.type === 'INSERT') {
-      const attrs = attribsOf(e);
-      it.attribs = attrs;
-      it.name = e.name;
+      const attrs = it.attribs;
       if (!e.name.startsWith('*')) {
         let b = blocks.get(e.name);
         if (!b) blocks.set(e.name, (b = { name: e.name, count: 0, layers: new Set(), items: [], attrValues: new Map() }));
@@ -54,49 +84,23 @@ export function analyze(drawing, scene) {
       }
       const label = [e.name, ...attrs.map((a) => `${a.tag}:${a.value}`)].join(' ');
       searchable.push({ item: it.id, kind: 'block', text: label });
+      // Texts nested inside the block (e.g. tags drawn as plain text) are searchable too.
+      const seen = [label];
+      for (let k = it.first; k < it.last; k++) {
+        const p = scene.prims[k];
+        if (p.k !== TEXT || p.dead) continue;
+        const t = p.lines.map((l) => l.s).join(' ');
+        if (!t.trim() || seen.some((x) => x.includes(t))) continue;
+        seen.push(t);
+        searchable.push({ item: it.id, kind: 'block-text', text: t });
+      }
     } else if (e.type?.includes('DIMENSION')) {
       const v = e.text && e.text !== '<>' && e.text.trim() ? decodeMText(e.text).join(' ') : formatNum(e.measurement);
       if (v) { dims.push(v); searchable.push({ item: it.id, kind: 'dim', text: v }); }
-    } else {
-      const t = itemText(e);
-      if (t.trim()) {
-        it.text = t;
-        searchable.push({ item: it.id, kind: 'text', text: t });
-      }
+    } else if (it.text) {
+      searchable.push({ item: it.id, kind: 'text', text: it.text });
     }
-
-    // Lengths of linework that belongs directly to this layer (pipes, ducts, walls).
-    if (['LINE', 'LWPOLYLINE', 'POLYLINE2D', 'POLYLINE3D', 'ARC', 'SPLINE', 'CIRCLE', 'ELLIPSE'].includes(e.type)) {
-      let len = 0;
-      for (let k = it.first; k < it.last; k++) {
-        const p = scene.prims[k];
-        if (p.k === STROKE && !p.infinite) len += polylineLength(p.pts, p.closed);
-      }
-      it.length = len;
-      s.length += len;
-    }
-  }
-
-  // Texts nested inside blocks (e.g. tags drawn as plain text) are searchable too.
-  // Entries are looked up per item, so drawings with many blocks stay fast.
-  const byItem = new Map();
-  for (const s of searchable) {
-    let arr = byItem.get(s.item);
-    if (!arr) byItem.set(s.item, (arr = []));
-    arr.push(s.text);
-  }
-  for (const p of scene.prims) {
-    if (p.k !== TEXT) continue;
-    const it = scene.items[p.item];
-    if (it.ent.type === 'INSERT') {
-      const t = p.lines.map((l) => l.s).join(' ');
-      if (!t.trim()) continue;
-      let arr = byItem.get(it.id);
-      if (arr?.some((s) => s.includes(t))) continue;
-      if (!arr) byItem.set(it.id, (arr = []));
-      arr.push(t);
-      searchable.push({ item: it.id, kind: 'block-text', text: t });
-    }
+    if (it.length) s.length += it.length;
   }
 
   return {
@@ -169,7 +173,7 @@ export function drawingSummary(drawing, scene, analysis, spaceName, maxChars = 1
   const lines = [];
   lines.push(`File: ${drawing.fileName} (${drawing.source.toUpperCase()}${drawing.version ? ', ' + drawing.version : ''})`);
   lines.push(`Space: ${spaceName}. Units: ${unit}. Extents: (${formatNum(x0 + o.x)}, ${formatNum(y0 + o.y)}) to (${formatNum(x1 + o.x)}, ${formatNum(y1 + o.y)}), size ${formatNum(x1 - x0)} x ${formatNum(y1 - y0)} ${unit}.`);
-  lines.push(`Top-level entities: ${scene.items.length}. Layouts: ${drawing.layouts.map((l) => l.name).join(', ') || 'none'}.`);
+  lines.push(`Top-level entities: ${scene.items.filter((it) => !it.deleted).length}. Layouts: ${drawing.layouts.map((l) => l.name).join(', ') || 'none'}.`);
   lines.push('');
   lines.push('## Layers (name | entities | linework length | entity types)');
   for (const l of analysis.layerStats) {
