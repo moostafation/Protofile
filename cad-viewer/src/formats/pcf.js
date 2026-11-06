@@ -126,11 +126,32 @@ export function parsePcf(input) {
     section = 'body';
   }
   for (const c of components) finishComponent(c, materials);
+  // An olet's centre point sits on its header pipe: the header gives its first size (150 × 50).
+  for (const c of components) {
+    if (!/OLET/.test(c.type) || !c.centre || c.centre.bore > 0) continue;
+    const host = components.find((p) => p !== c && p.pipeline === c.pipeline && p.endPoints.length >= 2 && p.bore > 0 && onSegment(c.centre, p.endPoints[0], p.endPoints[1]));
+    if (host) {
+      c.headerBore = host.bore;
+      c.bores = [...new Set([host.bore, ...c.bores])];
+      c.bore = Math.max(c.bore ?? 0, host.bore);
+    }
+  }
   const units = unitsOf(header);
   if (!components.some((c) => c.endPoints.length || c.coords)) {
     throw new FormatError('No piping components with coordinates were found in this file (it may not be a PCF, or it is empty).');
   }
   return { header, units, pipelines, components, materials, warnings };
+}
+
+/** True when point p lies on segment a-b (within a small tolerance). */
+function onSegment(p, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+  const L2 = dx * dx + dy * dy + dz * dz;
+  if (!(L2 > 0)) return false;
+  const t = ((p.x - a.x) * dx + (p.y - a.y) * dy + (p.z - a.z) * dz) / L2;
+  if (t < -1e-6 || t > 1 + 1e-6) return false;
+  const tol = Math.max(1e-3, Math.sqrt(L2) * 1e-5);
+  return Math.hypot(a.x + dx * t - p.x, a.y + dy * t - p.y, a.z + dz * t - p.z) <= tol;
 }
 
 function isHeaderKey(key) {

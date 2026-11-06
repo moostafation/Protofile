@@ -169,8 +169,9 @@ export class MergeBuilder {
     p.list.push(id, Array.from(matrix));
   }
 
-  /** Finishes the model. The result holds only typed arrays and plain objects (transferable). */
-  build() {
+  /** Finishes the model (`elementCount`: all elements, also those without geometry). Typed arrays only (transferable). */
+  build(elementCount = 0) {
+    if (elementCount > 0) this.ensureElement(elementCount - 1);
     const instanced = [];
     for (const p of this.placements.values()) {
       const n = p.list.length / 2;
