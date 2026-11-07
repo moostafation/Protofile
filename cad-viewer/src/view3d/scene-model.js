@@ -325,6 +325,33 @@ export class SceneModel {
   }
 
   /**
+   * Corner points of an element's triangles (shifted coordinates, deduplicated), for vertex
+   * snapping near the cursor; null for very large elements (the hit triangle's corners are used).
+   */
+  vertices(id, max = 60000) {
+    let n = 0;
+    for (const p of this.parts[id] ?? []) n += p.inst !== undefined ? this.inst[p.inst].index.length : p.count;
+    if (n > max) return null;
+    const out = [], seen = new Set();
+    const v = new THREE.Vector3();
+    for (const p of this.parts[id] ?? []) {
+      const g = p.inst !== undefined ? this.inst[p.inst] : this.chunks[p.chunk];
+      const m = p.inst !== undefined ? tmpM.fromArray(g.matrices, p.k * 16).clone() : null;
+      const from = p.inst !== undefined ? 0 : p.start, to = p.inst !== undefined ? g.index.length : p.start + p.count;
+      for (let i = from; i < to; i++) {
+        const vi = g.index[i] * 3;
+        const key = `${g.positions[vi]},${g.positions[vi + 1]},${g.positions[vi + 2]}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        v.fromArray(g.positions, vi);
+        if (m) v.applyMatrix4(m);
+        out.push(v.clone());
+      }
+    }
+    return out;
+  }
+
+  /**
    * Whether the edge p-q of a hit triangle is a real (feature) edge: false when the neighbouring
    * triangle of the same element across it lies in the same plane (a diagonal of a flat face).
    */

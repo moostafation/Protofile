@@ -1,11 +1,12 @@
 // IFC models: parsing runs in ifc-worker.js; this side turns the result into the viewer's model
 // (names, tree, properties, element list) and keeps the worker for property sets and search.
 import { workerClient } from './worker-client.js';
+import { FormatError } from '../formats/errors.js';
 
 const fmtN = (v, d = 3) => String(+Number(v).toFixed(d));
 
 function progressText(p) {
-  if (p.phase === 'geometry' && p.total) return `Reading IFC geometry… ${Math.round((100 * p.done) / p.total)}% (${p.done.toLocaleString('en-US')} of ${p.total.toLocaleString('en-US')} elements)`;
+  if (p.phase === 'geometry') return `Reading IFC geometry… ${Math.round(100 * p.fraction)}% (${p.elements.toLocaleString('en-US')} elements)`;
   if (p.phase === 'merge') return 'Preparing the 3D view…';
   return 'Reading the IFC structure…';
 }
@@ -31,6 +32,10 @@ function nameOf(e) {
 
 export function ifcModel(res, fileName, client = null) {
   const { units } = res;
+  if (!res.geometry.triangles) {
+    client?.dispose();
+    throw new FormatError('This IFC file contains no 3D geometry (it may be cut off or damaged, or hold only data).');
+  }
   const elements = res.elements.map((e, i) => ({ ...e, index: i, name: nameOf(e) }));
   for (const e of elements) {
     e.storey = e.storeyIndex !== undefined ? elements[e.storeyIndex].name : '';

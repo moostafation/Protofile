@@ -18,6 +18,11 @@ export function sharedViewer() {
   return viewer;
 }
 
+/** GPU resources held by the 3D viewport (tests check they are freed when a model closes). */
+export function viewerStats() {
+  return viewer ? { ...viewer.renderer.info.memory, programs: viewer.renderer.info.programs?.length ?? 0, model: !!viewer.model } : null;
+}
+
 const csvCell = (v) => { const s = String(v ?? ''); return /[",\n;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
 
 export class Doc3D {

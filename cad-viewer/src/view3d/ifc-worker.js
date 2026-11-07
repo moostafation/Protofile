@@ -161,7 +161,8 @@ async function load(buffer, report) {
       }
     }
     const now = performance.now();
-    if (now - lastReport > 150) { lastReport = now; report({ phase: 'geometry', done: index + 1, total }); }
+    // web-ifc counts batches (index of total), not elements: the element count is ours.
+    if (now - lastReport > 150) { lastReport = now; report({ phase: 'geometry', fraction: total ? (index + 1) / total : 0, elements: elementOf.size }); }
   }, false);
   const tGeom = performance.now();
   // Second pass: merge (shifted to the model centre).

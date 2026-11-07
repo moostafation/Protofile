@@ -521,7 +521,7 @@ async function set3dDoc(model, fileSize = 0) {
   try {
     view = new Doc3D(model, {
       t, toast, icon, escapeHtml, theme: THEMES[state.theme],
-      onSelection: () => { showProperties(); updateStatus(); },
+      onSelection: () => { showProperties(); updateStatus(); updateSelectionStatus(); },
       onStatus: (p) => updateStatus(p),
     });
   } catch (err) {
@@ -2345,4 +2345,4 @@ if (platform.isDesktop) initDesktop();
 if (new URLSearchParams(location.search).has('sample')) openSample();
 else if (new URLSearchParams(location.search).has('sample3d')) openSample('cooling-water.pcf', 'cooling-water-sample.pcf');
 platform.registerServiceWorker();
-window.protocad = { state, viewer, openFile, openHandedFiles, ed, ops, saveDrawing, setTool, runCommand, submitCommand, activeSpace, view3d, assistant };
+window.protocad = { state, viewer, openFile, openHandedFiles, ed, ops, saveDrawing, setTool, runCommand, submitCommand, activeSpace, view3d, assistant, view3dStats: () => doc3dModule?.then((m) => m.viewerStats()) ?? null };

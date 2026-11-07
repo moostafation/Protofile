@@ -104,6 +104,7 @@ async function load(format, buffer) {
   };
   const tree = node(r.root ?? { name: 'Model', meshes: r.meshes.map((_, i) => i) }, []);
   const geometry = builder.build(elements.length);
+  if (!geometry.triangles) throw new Error(`No surfaces could be triangulated in this ${format.toUpperCase()} file.`);
   return { elements, tree, geometry, materials, times: { read: Math.round(tRead - t0), total: Math.round(performance.now() - t0) } };
 }
 

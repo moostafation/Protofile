@@ -10,6 +10,7 @@ import { FormatError } from '../formats/errors.js';
 
 const ZUP = new THREE.Matrix4().set(1, 0, 0, 0, 0, 0, -1, 0, 0, 1, 0, 0, 0, 0, 0, 1); // (x, y, z)_Y-up -> (x, -z, y)
 const Y_UP = new Set(['gltf', 'obj', 'fbx', 'dae']);
+const NAMES = { stl: 'STL', obj: 'OBJ', gltf: 'glTF', ply: 'PLY', fbx: 'FBX', dae: 'COLLADA', '3mf': '3MF' };
 const PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==';
 
 const baseName = (u) => decodeURIComponent(String(u).split(/[?#]/)[0]).split(/[\\/]/).pop().toLowerCase();
@@ -170,8 +171,13 @@ export async function loadMeshFormat(kind, buffer, fileName, ctx = {}) {
     release();
     if (err instanceof FormatError) throw err;
     const m = /(\S+\.bin)\b/i.exec(String(err?.message || ''));
-    if (m || missing.size) throw new FormatError(`This ${kind.toUpperCase()} file refers to ${m ? m[1] : [...missing].join(', ')}, which was not found. Open the model together with its other files (select them all, or drop them together), or use a single-file format such as GLB.`);
-    throw new FormatError(`This ${kind.toUpperCase()} file could not be read: ${err?.message || err}`);
+    const label = NAMES[kind] ?? kind.toUpperCase();
+    if (m || missing.size) throw new FormatError(`This ${label} file refers to ${m ? m[1] : [...missing].join(', ')}, which was not found. Open the model together with its other files (select them all, or drop them together), or use a single-file format such as GLB.`);
+    // Low-level parser messages (DataView bounds, JSON tokens…) mean a damaged or cut-off file.
+    if (err instanceof RangeError || /DataView|bounds|Unexpected (token|end)|JSON|Invalid typed array|undefined|null/i.test(String(err?.message))) {
+      throw new FormatError(`This ${label} file is damaged or incomplete and could not be read.`);
+    }
+    throw new FormatError(`This ${label} file could not be read: ${err?.message || err}`);
   }
   // Textures load asynchronously from blob URLs; they stay valid until the model is closed.
   const root = parsed.root;
@@ -271,7 +277,7 @@ export async function loadMeshFormat(kind, buffer, fileName, ctx = {}) {
   const tree = node(root);
   tree.name = fileName;
   tree.open = true;
-  if (!elements.length && !extras.length) { release(); throw new FormatError('No 3D geometry was found in this file.'); }
+  if (!triangles && !extras.length) { release(); throw new FormatError('No 3D geometry was found in this file.'); }
   const geometry = builder.build(elements.length);
   for (const e of elements) {
     const rows = [['Node', e.name], ['Type', e.type], ['Triangles', e.triangles.toLocaleString('en-US')]];

@@ -104,6 +104,7 @@ export class Viewer3D {
   /** Shows a SceneModel (null clears). The previous one is not disposed here. */
   setModel(sm, units = '') {
     if (this.model) this.scene.remove(this.model.group);
+    this.snapCache = null;
     this.model = sm;
     this.units = units;
     this.measures = [];
@@ -523,10 +524,18 @@ export class Viewer3D {
     const S = (p) => this.project(p);
     const near = 10;
     let best = null;
-    for (const v of hit.tri) {
+    // Corners of the element near the cursor (cached per element), else of the hit triangle.
+    if (this.snapCache?.id !== hit.id) this.snapCache = { id: hit.id, verts: this.model.vertices(hit.id) };
+    const verts = this.snapCache.verts ?? hit.tri;
+    const { dir } = axes(this.cam.az, this.cam.el);
+    const hitDepth = hit.point.clone().sub(this.camera.position).dot(dir);
+    for (const v of verts) {
       const s = S(v);
       const d = Math.hypot(s.x - x, s.y - y);
-      if (d < near && (!best || d < best.d)) best = { d, point: v.clone(), kind: 'vertex' };
+      if (d >= near || (best && d >= best.d) || s.behind) continue;
+      // Not a corner hidden behind the surface under the cursor (e.g. the far side of a pipe).
+      if (v.clone().sub(this.camera.position).dot(dir) > hitDepth + this.pixelSize(hitDepth) * 6) continue;
+      best = { d, point: v.clone(), kind: 'vertex' };
     }
     if (best) return { ...best, id: hit.id };
     for (let i = 0; i < 3; i++) {
