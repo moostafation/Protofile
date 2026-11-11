@@ -18,11 +18,15 @@
 !macro PROTOCAD_OPEN_WITH EXT PROGID
   Push $R0
   Push $R1
+  Push $R2
   ; An earlier version made itself the default app for this type: restore the previous default.
   ReadRegStr $R0 SHCTX "Software\Classes\.${EXT}" ""
   ${If} $R0 == "${PROGID}"
     ReadRegStr $R1 SHCTX "Software\Classes\.${EXT}" "${PROGID}_backup"
+    ; A backup that is itself a ProtoCAD class (left by an earlier update) is no real previous default.
+    StrCpy $R2 $R1 9
     ${If} $R1 == ""
+    ${OrIf} $R2 == "ProtoCAD."
       DeleteRegValue SHCTX "Software\Classes\.${EXT}" ""
     ${Else}
       WriteRegStr SHCTX "Software\Classes\.${EXT}" "" "$R1"
@@ -31,6 +35,7 @@
   DeleteRegValue SHCTX "Software\Classes\.${EXT}" "${PROGID}_backup"
   WriteRegStr SHCTX "Software\Classes\.${EXT}\OpenWithProgids" "${PROGID}" ""
   WriteRegStr SHCTX "Software\Classes\Applications\${MAINBINARYNAME}.exe\SupportedTypes" ".${EXT}" ""
+  Pop $R2
   Pop $R1
   Pop $R0
 !macroend

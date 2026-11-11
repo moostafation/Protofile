@@ -7,6 +7,7 @@
 // raster images) or skipped (3D solids, proxies), and listed in the report.
 import { lineweightToMm, LW_BYLAYER, LW_BYBLOCK, LW_DEFAULT } from './drawing.js';
 import { nearestAci } from './aci.js';
+import { hasAlignPoint } from './text.js';
 import { mlineToPolylines, multileaderParts } from '../edit/entities.js';
 
 const DEG = 180 / Math.PI;
@@ -23,6 +24,9 @@ const MATERIAL_BODY = '100\nAcDbMaterial\n1\n{NAME}\n2\n\n70\n0\n40\n1.0\n71\n1\
 function num(v) {
   if (!Number.isFinite(v)) return '0.0';
   if (Object.is(v, -0)) v = 0;
+  // Floating-point noise from edits (7000.000000000001) is written as the intended value.
+  const r = +v.toPrecision(14);
+  if (r !== v && Math.abs(r - v) <= Math.abs(v) * 1e-12) v = r;
   const s = String(v);
   return /[.e]/.test(s) ? s : s + '.0';
 }
@@ -84,7 +88,53 @@ const CONVERSIONS = {
  * @returns {{ text: string, report: SaveReport }}
  */
 export function writeDxf(drawing, opts = {}) {
-  return new DxfWriter(drawing, opts).write();
+  const w = new DxfWriter(drawing, opts);
+  return opts.doc && canPatch(drawing) ? w.writePatched(opts.doc) : w.write();
+}
+
+/**
+ * A DXF source with its original records (AutoCAD 2000 or later: handles, tables, objects) is
+ * saved by patching: untouched records are written back exactly as read.
+ */
+export function canPatch(d) {
+  const r = d.raw;
+  if (!r || d.source !== 'dxf') return false;
+  const ver = String(d.header?.ACADVER ?? '');
+  return ['HEADER', 'TABLES', 'BLOCKS', 'ENTITIES', 'OBJECTS'].every((s) => r.order.includes(s)) && /^AC10(1[5-9]|[2-3]\d)$/.test(ver);
+}
+
+const rawLines = (t) => t.replace(/\n$/, '');
+
+/**
+ * An edited entity keeps what the model does not hold from its original record: the reactor and
+ * extension dictionary groups (102) and the xdata (1001…) of the main record.
+ * @param {string[]} lines the new record as alternating code/value lines
+ * @param {string} original the original record text
+ */
+function graft(lines, original) {
+  const o = rawLines(original).split('\n');
+  let end = o.length;
+  for (let k = 2; k + 1 < o.length; k += 2) if (parseInt(o[k], 10) === 0) { end = k; break; }
+  const groups = [], xdata = [];
+  for (let k = 2; k + 1 < end; k += 2) {
+    const c = parseInt(o[k], 10);
+    if (c === 102 && o[k + 1].startsWith('{')) {
+      let j = k;
+      while (j + 1 < end && !(parseInt(o[j], 10) === 102 && o[j + 1] === '}')) j += 2;
+      groups.push(...o.slice(k, j + 2));
+      k = j;
+    } else if (c >= 1000) { xdata.push(...o.slice(k, end)); break; }
+  }
+  if (!groups.length && !xdata.length) return lines.join('\n');
+  const out = lines.slice();
+  if (xdata.length) {
+    let at = out.length;
+    for (let k = 2; k + 1 < out.length; k += 2) if (parseInt(out[k], 10) === 0) { at = k; break; }
+    out.splice(at, 0, ...xdata);
+  }
+  // 102 groups follow the handle (code 5) of the main record.
+  if (groups.length) out.splice(4, 0, ...groups);
+  return out.join('\n');
 }
 
 class DxfWriter {
@@ -171,6 +221,8 @@ class DxfWriter {
         name = clean === b.name && !taken.has(clean.toUpperCase()) ? (taken.add(clean.toUpperCase()), clean) : claim(clean);
       }
       this.blockNames.set(b.name, name);
+      // Named blocks that DXF cannot hold as named are renamed: say so in the save summary.
+      if (name !== b.name && !ANON.test(b.name)) this.report.convert(`block "${b.name}" renamed to "${name}"`);
     }
     taken.add('*U');
   }
@@ -190,6 +242,10 @@ class DxfWriter {
     this.layers = new Map(); // upper name -> { name, ... }
     const addLayer = (name, l) => {
       const n = this.layerName(name);
+      if (n !== String(name ?? '0') && !this.renamedLayers?.has(name)) {
+        (this.renamedLayers ??= new Set()).add(name);
+        this.report.convert(`layer "${name}" renamed to "${n}"`);
+      }
       if (!this.layers.has(n.toUpperCase())) this.layers.set(n.toUpperCase(), { name: n, l });
     };
     addLayer('0', d.layers.get('0'));
@@ -263,7 +319,6 @@ class DxfWriter {
     const blocks = this.writeBlocks();
 
     const out = new Out();
-    this.writeHeader(out);
     this.writeClasses(out);
     this.writeTables(out);
     out.s(0, 'SECTION'); out.s(2, 'BLOCKS');
@@ -276,8 +331,177 @@ class DxfWriter {
     end.s(0, 'ENDSEC');
     this.writeObjects(end);
     end.s(0, 'EOF');
+    // The header is written last: $HANDSEED must be above every handle the tables and objects took.
+    const hdr = new Out();
+    this.writeHeader(hdr);
     // Large drawings have millions of lines: join the sections separately.
-    return { text: head + blocks.text() + mid + ents.text() + end.text(), report: this.report };
+    return { text: hdr.text() + head + blocks.text() + mid + ents.text() + end.text(), report: this.report };
+  }
+
+  // ------------------------------------------------------------ patch mode (DXF sources)
+  /**
+   * Writes a DXF source back from its original records: header variables (only the handle seed,
+   * extents and current layer change), classes, every table entry, objects and all entities the
+   * user did not touch are copied as read, with their handles, xdata and reactors. Edited and new
+   * entities, changed layers and new blocks are written from the model.
+   */
+  writePatched(doc) {
+    const d = this.d, raw = d.raw;
+    this.setupNames();
+    this.report.converted.clear(); // names are kept as they are in patch mode
+    this.blockNames = new Map(); // the source's names are valid DXF names
+    this.layerName = (name) => String(name ?? '0') || '0';
+    this.collectTables();
+    this.scanHandles();
+    this.next = Math.max(this.next, raw.maxHandle + 1, doc.nextHandle ?? 0);
+    this.entityHandle = (e) => {
+      const h = typeof e?.handle === 'string' ? e.handle.toUpperCase() : '';
+      if (raw.originals.has(e) && /^[0-9A-F]{1,15}$/.test(h) && h !== '0' && !this.used.has(h)) { this.used.add(h); return h; }
+      return this.newHandle();
+    };
+    this.report.kept = 0;
+    const brRecords = raw.tables.find((t) => t.type === 'BLOCK_RECORD')?.records ?? [];
+    const brOf = (name) => brRecords.find((r) => r.name.toUpperCase() === String(name).toUpperCase())?.handle;
+    const isModel = (n) => /^\*model_space$/i.test(n), isPaper = (n) => /^\*paper_space$/i.test(n);
+    // Renamed layers: references in untouched records follow (code 8 on code lines only).
+    const renames = new Map();
+    for (const l of d.layers.values()) if (l.rawName && l.rawName !== l.name) renames.set(l.rawName, l.name);
+    const relayer = (t) => {
+      if (!renames.size) return rawLines(t);
+      const ln = rawLines(t).split('\n');
+      for (let k = 0; k + 1 < ln.length; k += 2) if (ln[k].trim() === '8' && renames.has(ln[k + 1])) ln[k + 1] = renames.get(ln[k + 1]);
+      return ln.join('\n');
+    };
+    const emit = (out, list, owner, paper) => {
+      for (const e of list) {
+        const text = raw.of.get(e);
+        const edited = doc.dirty.has(e) || (e.attribs ?? []).some((x) => doc.dirty.has(x));
+        if (text !== undefined && !edited) { out.raw(relayer(text)); this.report.kept++; continue; }
+        try {
+          if (text === undefined) { this.entity(out, e, owner, paper); continue; }
+          const tmp = new Out();
+          this.entity(tmp, e, owner, paper);
+          if (tmp.parts.length) out.raw(graft(tmp.parts, text)); // else reported as skipped
+        } catch (err) { this.report.skip(`${e.type} (${err.message})`); }
+      }
+    };
+    // Every block of the drawing is written (as read, or new): references to them resolve.
+    this.brByName = new Map([...d.blocks.keys()].map((n) => [n.toUpperCase(), { name: n }]));
+    this.extraBlocks = [];
+    // ENTITIES: model space and the active layout.
+    const ents = new Out();
+    const modelBR = brOf('*Model_Space') ?? this.newHandle();
+    emit(ents, d.modelEntities, modelBR, false);
+    const activeBlock = [...d.blocks.values()].find((b) => isPaper(b.name));
+    if (activeBlock) emit(ents, activeBlock.entities, brOf(activeBlock.name), true);
+    // BLOCKS: changed blocks are rebuilt between their original BLOCK and ENDBLK records.
+    const blocks = new Out();
+    for (const [name, rb] of Object.entries(raw.blocks)) {
+      const b = d.blocks.get(name);
+      if (!b) continue;
+      blocks.raw(rawLines(rb.begin));
+      if (!isModel(name) && !isPaper(name)) emit(blocks, b.entities, brOf(name), /^\*paper_space/i.test(name));
+      blocks.raw(rawLines(rb.end));
+    }
+    const fresh = [];
+    for (const b of d.blocks.values()) {
+      if (raw.blocks[b.name] || isModel(b.name) || isPaper(b.name)) continue;
+      const x = { name: b.name, br: this.newHandle(), block: this.newHandle(), end: this.newHandle(), base: b.base, entities: b.entities };
+      fresh.push(x);
+      this.blockEntry(blocks, { ...x, flags: (b.name.startsWith('*') ? 1 : 0) | (b.entities.some((e) => e.type === 'ATTDEF') ? 2 : 0), paper: false }, b.entities);
+    }
+    for (let i = 0; i < this.extraBlocks.length; i++) {
+      const x = this.extraBlocks[i];
+      fresh.push(x);
+      this.blockEntry(blocks, { ...x, flags: 1, paper: false }, x.entities);
+    }
+    // TABLES: as read, with changed layers patched and records for new blocks.
+    const tables = new Out();
+    for (const t of raw.tables) {
+      const own = /\n5\n([0-9A-Fa-f]+)\n/.exec(t.head)?.[1] ?? '0';
+      let records = t.records.map((r) => r.text);
+      if (t.type === 'LAYER' && doc.dirtyLayers) records = this.patchLayers(t, own);
+      if (t.type === 'BLOCK_RECORD') {
+        for (const x of fresh) {
+          records.push(`0\nBLOCK_RECORD\n5\n${x.br}\n330\n${own}\n100\nAcDbSymbolTableRecord\n100\nAcDbBlockTableRecord\n2\n${x.name}\n70\n0\n280\n1\n281\n0\n`);
+        }
+      }
+      tables.raw(rawLines(t.head.replace(/(\n70\n)-?\d+(\n)/, `$1${records.length}$2`)));
+      for (const r of records) tables.raw(rawLines(r));
+      tables.s(0, 'ENDTAB');
+    }
+    // Assemble in the original section order; the header goes last (it needs the handle seed).
+    const parts = [];
+    const section = (name, body) => `  0\r\nSECTION\r\n  2\r\n${name}\r\n${body}  0\r\nENDSEC\r\n`;
+    for (const name of raw.order) {
+      if (name === 'HEADER') parts.push(null);
+      else if (name === 'TABLES') parts.push(section(name, tables.text()));
+      else if (name === 'BLOCKS') parts.push(section(name, blocks.text()));
+      else if (name === 'ENTITIES') parts.push(section(name, ents.text()));
+      else if (raw.sections[name] !== undefined) parts.push(section(name, raw.sections[name] ? rawLines(raw.sections[name]).split('\n').join('\r\n') + '\r\n' : ''));
+    }
+    parts[parts.indexOf(null)] = section('HEADER', this.patchedHeader().text());
+    return { text: parts.join('') + '  0\r\nEOF\r\n', report: this.report };
+  }
+
+  /** The original header with the handle seed, extents and current layer brought up to date. */
+  patchedHeader() {
+    const out = new Out();
+    const ext = this.opts.extents;
+    const set = {
+      $HANDSEED: [[5, this.next.toString(16).toUpperCase()]],
+      $CLAYER: [[8, this.d.header.CLAYER || '0']],
+      ...(ext && ext.every(Number.isFinite) ? { $EXTMIN: [[10, num(ext[0])], [20, num(ext[1])], [30, '0']], $EXTMAX: [[10, num(ext[2])], [20, num(ext[3])], [30, '0']] } : {}),
+    };
+    const done = new Set();
+    let skip = false;
+    for (const [code, v] of this.d.raw.header) {
+      if (code === 9) {
+        skip = !!set[v];
+        out.add(9, v);
+        if (skip) { for (const [c, x] of set[v]) out.add(c, x); done.add(v); }
+        continue;
+      }
+      if (!skip) out.add(code, v);
+    }
+    if (!done.has('$HANDSEED')) { out.add(9, '$HANDSEED'); out.add(5, set.$HANDSEED[0][1]); }
+    return out;
+  }
+
+  /** LAYER table records: original records with name, colour, on/off, frozen and lock updated; new layers added. */
+  patchLayers(t, owner) {
+    const byName = new Map(t.records.map((r) => [r.name.toUpperCase(), r]));
+    const out = [];
+    for (const l of this.d.layers.values()) {
+      const rec = byName.get(String(l.rawName ?? l.name).toUpperCase());
+      const aci = Math.abs(l.aci ?? 7) || 7;
+      const color = l.on === false ? -aci : aci;
+      const flags = (l.frozen ? 1 : 0) | (l.locked ? 4 : 0);
+      if (!rec) {
+        out.push(`0\nLAYER\n5\n${this.newHandle()}\n330\n${owner}\n100\nAcDbSymbolTableRecord\n100\nAcDbLayerTableRecord\n2\n${l.name}\n70\n${flags}\n62\n${color}\n${typeof l.trueColor === 'number' ? `420\n${l.trueColor & 0xffffff}\n` : ''}6\n${l.ltype || 'Continuous'}\n370\n-3\n`);
+        continue;
+      }
+      // Pairs of the original record; only the managed codes change (xdata after 1001 is kept).
+      const lines = rawLines(rec.text).split('\n');
+      const pairs = [];
+      for (let k = 0; k + 1 < lines.length; k += 2) pairs.push([lines[k], lines[k + 1]]);
+      let inXdata = false, had420 = false;
+      const res = [];
+      for (const [c, v] of pairs) {
+        const code = parseInt(c, 10);
+        if (code === 1001) inXdata = true;
+        if (inXdata) { res.push([c, v]); continue; }
+        if (code === 2) res.push([c, l.name]);
+        else if (code === 62) {
+          res.push([c, String(color)]);
+          if (typeof l.trueColor === 'number') { res.push(['420', String(l.trueColor & 0xffffff)]); had420 = true; }
+        } else if (code === 420) { if (!had420 && typeof l.trueColor === 'number') res.push([c, String(l.trueColor & 0xffffff)]); }
+        else if (code === 70) res.push([c, String((parseInt(v, 10) & ~5) | flags)]);
+        else res.push([c, v]);
+      }
+      out.push(res.map(([c, v]) => `${c}\n${v}\n`).join(''));
+    }
+    return out;
   }
 
   writeBlocks() {
@@ -411,7 +635,7 @@ class DxfWriter {
     const ha = base.halign ?? 0, va = base.valign ?? 0;
     if (ha) out.i(72, ha);
     if (ha || va) {
-      const ep = base.endPoint && (base.endPoint.x || base.endPoint.y) ? base.endPoint : base.startPoint;
+      const ep = hasAlignPoint(base) ? base.endPoint : base.startPoint;
       out.p(11, ep);
     }
     this.ext(out, base.extrusionDirection ? base : e);
@@ -894,7 +1118,7 @@ Object.assign(DxfWriter.prototype, {
     v('REGENMODE', 70, 1);
     v('FILLMODE', 70, 1);
     v('QTEXTMODE', 70, 0);
-    v('MIRRTEXT', 70, 0);
+    v('MIRRTEXT', 70, numOr(hd.MIRRTEXT, 0) ? 1 : 0);
     v('LTSCALE', 40, numOr(hd.LTSCALE, 1) || 1);
     v('ATTMODE', 70, 1);
     v('TEXTSIZE', 40, numOr(hd.TEXTSIZE, 2.5) || 2.5);

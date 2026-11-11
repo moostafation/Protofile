@@ -133,7 +133,12 @@ const ed = {
   offset(ent, dist, side) { return ops.offsetOne(editCtx(), ent, dist, side); },
   applyGrip(grip, x, y) {
     const it = activeSpace().scene.items[grip.item];
-    if (!it || it.deleted) return;
+    if (!it || it.deleted || isLockedItem(it.id)) return;
+    if (grip.kind === 'move' && /DIMENSION|ACAD_TABLE/.test(it.ent.type)) {
+      // Their graphics live in a block: move them like the Move command does.
+      ops.transformEntities(editCtx(), [it.ent], [1, 0, 0, 1, x - grip.x, y - grip.y], 'Grip edit');
+      return;
+    }
     // Grips belong to the entity as it was when the grip was shown: find it again by position.
     ops.modifyEntities(editCtx(), [it.ent], (e) => {
       const g = gripsAt(e, it, grip);
@@ -832,12 +837,13 @@ function eraseSelection() {
 function explodeSelection() {
   const ents = ed.selectedEntities();
   if (!ents.length) { toast(t('selectFirst')); return; }
-  const { created, skipped } = ops.explodeEntities(editCtx(), ents);
+  const { created, skipped, reasons } = ops.explodeEntities(editCtx(), ents);
+  if (!created.length && reasons?.length) { toast(`${t('explodeRefused')} ${reasons.join(', ')}`, true, 7000); return; }
   if (!created.length) { toast(t('explodeNone')); return; }
   const sp = activeSpace();
   state.selection = created.map((e) => sp.scene.itemOf.get(e)).filter((id) => id !== undefined);
   selectionChanged();
-  if (skipped) toast(`${skipped} of ${ents.length} objects could not be exploded.`);
+  if (skipped) toast(`${skipped} of ${ents.length} objects could not be exploded${reasons?.length ? ` (${t('explodeRefused')} ${reasons.join(', ')})` : ''}.`);
 }
 
 function selectAll() {
@@ -1357,6 +1363,7 @@ function showProperties() {
     if (e.handle) ro.push([t('handle'), e.handle]);
     if (it.text && e.type !== 'TEXT' && e.type !== 'MTEXT') ro.push([t('text'), it.text]);
     if (e.type?.includes('DIMENSION') && Number.isFinite(e.measurement)) ro.push(['Value', formatNum(e.measurement, 3)]);
+    if (e.type?.includes('DIMENSION') && e.text && e.text !== '<>') ro.push(['Text override', e.text]);
     if (it.length) ro.push([t('length'), formatLength(it.length, unit)]);
     const closed = sp.scene.prims.slice(it.first, it.last).find((p) => p.k === STROKE && p.closed);
     if (closed && ['LWPOLYLINE', 'POLYLINE2D', 'CIRCLE', 'ELLIPSE'].includes(e.type)) ro.push([t('area'), formatArea(Math.abs(polygonArea(closed.pts)), unit)]);
@@ -2029,7 +2036,7 @@ function isBrowserShortcut(ev) {
 }
 
 /** Printable keys that start typing into the command line. */
-const TYPABLE = /^[\w@.,<>+\-#%:/\\* ]$/;
+const TYPABLE = /^[\p{L}\p{N}\p{P}\p{S} ]$/u; // any letter, digit, punctuation or symbol (Ø ° ± Arabic…)
 
 document.addEventListener('keydown', (ev) => {
   // An open menu closes first, even when its Snap checkbox has the focus.
@@ -2138,11 +2145,14 @@ function saveDrawing(saveAs) {
 async function doSave(saveAs) {
   const doc = state.doc;
   const d = doc.drawing;
+  // What is being saved: edits made while a dialog is open stay unsaved.
+  const edit = state.edit;
+  const top = edit.undoStack.at(-1) ?? null;
   let text, report;
   try {
     const sp = doc.spaces[0];
     const o = sp.scene.origin, bb = sp.scene.bbox;
-    ({ text, report } = writeDxf(d, { extents: [bb[0] + o.x, bb[1] + o.y, bb[2] + o.x, bb[3] + o.y], handleSeed: state.edit.nextHandle }));
+    ({ text, report } = writeDxf(d, { extents: [bb[0] + o.x, bb[1] + o.y, bb[2] + o.x, bb[3] + o.y], handleSeed: edit.nextHandle, doc: edit }));
   } catch (err) {
     console.error(err);
     toast(`${t('saveFailed')}: ${err.message}`, true, 7000);
@@ -2152,8 +2162,15 @@ async function doSave(saveAs) {
   const name = d.fileName.replace(/\.[^.]+$/, '') + '.dxf';
   let path = null;
   try {
-    if (!saveAs && platform.isDesktop && doc.path && /\.dxf$/i.test(doc.path)) {
-      await platform.writeFile(doc.path, blob);
+    let overwrite = !saveAs && platform.isDesktop && doc.path && /\.dxf$/i.test(doc.path);
+    // Overwriting the source would lose or convert something: say what before writing.
+    if (overwrite && report.summary()) {
+      const answer = await askLoss(report.summary(), d.fileName);
+      if (answer === 'cancel') return false;
+      if (answer === 'saveas') overwrite = false;
+    }
+    if (overwrite) {
+      await platform.writeFile(doc.path, blob); // keeps the previous file as <name>.bak
       path = doc.path;
     } else {
       path = await platform.saveFile(blob, name, dxfFilters(), { directory: docFolder() });
@@ -2169,11 +2186,11 @@ async function doSave(saveAs) {
     d.fileName = path.split(/[\\/]/).pop();
     platform.addRecent(path);
   } else if (!/\.dxf$/i.test(d.fileName)) d.fileName = name;
-  state.edit.markSaved();
+  if (state.edit === edit) edit.markSaved(top);
   const notes = [];
   if (d.source !== 'dxf' && !doc.dxfNoticeShown) {
     doc.dxfNoticeShown = true;
-    notes.push(t('savedDxfNote').replace('{file}', d.fileName));
+    notes.push(t(d.source === 'dwg' ? 'savedDxfNote' : 'savedDxfNoteOther').replace('{file}', d.fileName));
   } else notes.push(path ? `${t('savedTo')} ${path}` : `${t('saved')}: ${d.fileName}`);
   const summary = report.summary();
   if (summary) notes.push(`${t('saveSummary')} ${summary}.`);
@@ -2181,6 +2198,18 @@ async function doSave(saveAs) {
   updateEditUi();
   buildInfoPanel();
   return true;
+}
+
+/** Asks before overwriting a drawing when saving would convert or leave out objects. */
+function askLoss(summary, file) {
+  const dlg = $('#lossDialog');
+  $('#lossText').textContent = t('lossText').replace('{file}', file);
+  $('#lossList').innerHTML = summary.split(', ').map((x) => `<li>${escapeHtml(x)}</li>`).join('');
+  dlg.returnValue = '';
+  return new Promise((resolve) => {
+    dlg.onclose = () => resolve(dlg.returnValue || 'cancel');
+    dlg.showModal();
+  });
 }
 
 /**

@@ -147,14 +147,27 @@ export function explodeEntities(ctx, ents) {
   const { doc, drawing, container } = ctx;
   let skipped = 0;
   const created = [];
-  const env = { drawing, measure: ctx.measure, tableBlock: (e) => tableBlockName(drawing, e) };
+  // Dimensions and tables inside an exploded block: their graphics block is copied and moved too.
+  const moves = [];
+  const env = { drawing, measure: ctx.measure, tableBlock: (e) => tableBlockName(drawing, e), blockXform: (name, M, owner) => { if (name) moves.push({ name, M, owner }); } };
   const parts = new Map();
   for (const e of ents) {
+    env.reasons = null;
+    const before = moves.length;
     const p = explodeEntity(e, env);
-    if (p && p.length) parts.set(e, p); else skipped++;
+    if (p && p.length) parts.set(e, p); else { skipped++; moves.length = before; }
+    if (env.reasons) for (const r of env.reasons) (env.allReasons ??= new Set()).add(r);
   }
-  if (!parts.size) return { created, skipped };
+  const reasons = [...(env.allReasons ?? [])];
+  if (!parts.size) return { created, skipped, reasons };
   doc.run(`Explode ${parts.size}`, (tx) => {
+    for (const { name, M, owner } of moves) {
+      const table = owner.type === 'ACAD_TABLE';
+      const block = duplicateBlock(tx, ctx, name, table ? '*T' : '*D');
+      if (!block) continue;
+      for (const be of block.entities) transformEntity(be, M, { measure: ctx.measure });
+      if (table) { owner.blockName = block.name; drawing.tableBlocks?.set(owner, block.name); } else owner.name = block.name;
+    }
     tx.remove(container, [...parts.keys()]);
     for (const p of parts.values()) {
       for (const n of p) {
@@ -164,7 +177,7 @@ export function explodeEntities(ctx, ents) {
       }
     }
   });
-  return { created, skipped };
+  return { created, skipped, reasons };
 }
 
 /** Offset copy of one entity through the point `side` (world). Returns the new entity or null. */

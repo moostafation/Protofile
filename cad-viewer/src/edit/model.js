@@ -59,8 +59,11 @@ export class EditDoc {
     this.savedTop = null;
     this.owner = new WeakMap(); // entity -> the array that holds it (null once removed)
     this.listeners = new Set();
-    this.nextHandle = handleSeed(drawing);
+    this.nextHandle = Math.max(handleSeed(drawing), (drawing.raw?.maxHandle ?? 0) + 1);
     this.version = 0;
+    this.dirty = new WeakSet();
+    this.dirtyBlocks = new Set();
+    this.dirtyLayers = false;
   }
 
   /** True when there are changes since opening or the last save. */
@@ -68,8 +71,9 @@ export class EditDoc {
     return (this.undoStack.at(-1) ?? null) !== this.savedTop;
   }
 
-  markSaved() {
-    this.savedTop = this.undoStack.at(-1) ?? null;
+  /** Marks the state saved; `top` is the undo step that was on top when the save started. */
+  markSaved(top = this.undoStack.at(-1) ?? null) {
+    this.savedTop = top;
     this.emit({ ents: new Set(), blocks: new Set(), layers: [], saved: true });
   }
 
@@ -89,6 +93,11 @@ export class EditDoc {
 
   emit(change) {
     this.version++;
+    // What changed since opening (also when undone later): saving re-writes these, and keeps the
+    // original records of everything else (DXF sources).
+    for (const e of change.ents ?? []) this.dirty.add(e);
+    for (const b of change.blocks ?? []) this.dirtyBlocks.add(b);
+    if (change.layers?.length) this.dirtyLayers = true;
     for (const fn of this.listeners) fn(change);
   }
 
@@ -292,7 +301,12 @@ class Transaction {
   modify(ent, fn, { container, block } = {}) {
     const doc = this.doc;
     const before = cloneData(ent);
-    fn(ent);
+    try {
+      fn(ent);
+    } catch (err) {
+      restore(ent, before); // a half-applied change never stays behind
+      throw err;
+    }
     const after = cloneData(ent);
     if (container && doc.owner.get(ent) === undefined) doc.owner.set(ent, container);
     const op = {

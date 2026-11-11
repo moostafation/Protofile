@@ -19,7 +19,7 @@ import {
   pushArc, pushBulge, pushEllipse, sampleNurbs, sampleThrough, transformFlat, bboxOf, polylineLength, polygonArea,
 } from './geometry.js';
 import { LW_BYBLOCK, LW_BYLAYER, LW_DEFAULT, lineweightToMm } from './drawing.js';
-import { decodeMText, decodeText } from './text.js';
+import { decodeMText, decodeText, hasAlignPoint } from './text.js';
 
 export const STROKE = 0, FILL = 1, TEXT = 2, HATCH = 3, POINT = 4, VPORT = 5;
 
@@ -214,7 +214,7 @@ class SceneBuilder {
     const m = mul(ctx.m, ocs);
     const ha = base.halign ?? 0, va = base.valign ?? 0;
     let px = base.startPoint?.x ?? 0, py = base.startPoint?.y ?? 0;
-    const hasAlign = (ha !== 0 || va !== 0) && base.endPoint && (base.endPoint.x !== 0 || base.endPoint.y !== 0);
+    const hasAlign = hasAlignPoint(base);
     let hAlign = ha;
     let vOffset = 0;
     if (ha === 3 || ha === 5) {

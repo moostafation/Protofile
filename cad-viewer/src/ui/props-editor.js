@@ -112,8 +112,8 @@ export function renderPropsEditor(dl, api) {
     geo.push(`<dt>Closed</dt><dd><input type="checkbox" class="pe" data-key="closed" ${closed === true ? 'checked' : ''} ${dis} /></dd>`);
     field('Global width', 'constantWidth', c((e) => e.constantWidth || 0));
   } else if (type?.includes('DIMENSION')) {
-    section('Dimension');
-    field('Text override', 'dimtext', c((e) => (e.text === '<>' ? '' : e.text ?? '')), 'str');
+    // A dimension draws from its graphics block, so changing e.text alone would show nothing and
+    // write a text that disagrees with the graphics: the override is shown, not edited.
   }
   const info = (api.readonly ?? []).map(([k, v]) => `<dt>${esc(k)}</dt><dd dir="auto">${v?.html ?? esc(String(v))}</dd>`);
   dl.innerHTML = rows.join('') + geo.join('') + (info.length ? `<div class="section">Info</div>${info.join('')}` : '') +
@@ -148,7 +148,6 @@ export function renderPropsEditor(dl, api) {
       setNumber(key, n, apply);
     } else if (key === 'mtext') apply('Text', (e) => { e.text = raw.replace(/\r\n|\r|\n/g, '\\P'); });
     else if (key === 'text') { if (raw.length) apply('Text', (e) => { e.text = raw.replace(/[\r\n]+/g, ' '); }); }
-    else if (key === 'dimtext') apply('Dimension text', (e) => { e.text = raw; });
     else if (key.startsWith('attr:')) {
       const tag = key.slice(5);
       apply(`Attribute ${tag}`, (e) => { for (const a of e.attribs ?? []) if (a.tag === tag && a.text) a.text.text = raw; });

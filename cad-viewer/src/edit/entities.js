@@ -3,7 +3,7 @@
 // of the parsers (angles in radians, OCS points for 2D entities). Points here are WCS.
 import { mul, invert, det, apply, ocsMatrix, rotate, translate, scale as scaleM, IDENTITY } from '../cad/geometry.js';
 import { lineweightToRaw, LW_BYLAYER } from '../cad/drawing.js';
-import { decodeText, decodeMText } from '../cad/text.js';
+import { decodeText, decodeMText, hasAlignPoint } from '../cad/text.js';
 import { cloneData } from './model.js';
 
 const TAU = Math.PI * 2;
@@ -496,10 +496,7 @@ function textBox(t, env) {
   return { w, h, cx, cy };
 }
 
-const usesEnd = (t) => {
-  const ha = t.halign ?? 0, va = t.valign ?? 0;
-  return (ha !== 0 || va !== 0) && t.endPoint && (t.endPoint.x !== 0 || t.endPoint.y !== 0);
-};
+const usesEnd = (t) => hasAlignPoint(t);
 
 /** Picks the readable one of the two orientations a mirrored text can take (MIRRTEXT = 0). */
 function readableRotation(sim, rot) {
@@ -905,6 +902,9 @@ export function explodeEntity(e, env) {
             const copy = cloneData(sub);
             const placed = place(copy, M, e, env);
             if (placed) out.push(placed === true ? copy : placed);
+            // Content that cannot be placed this way (e.g. a hatch under a non-uniform scale): the
+            // block is not exploded rather than losing it.
+            else { (env.reasons ??= new Set()).add(sub.type); return null; }
           }
         }
       }
@@ -919,7 +919,7 @@ export function explodeEntity(e, env) {
       const name = e.type === 'ACAD_TABLE' ? env.tableBlock?.(e) : e.name;
       const block = name && d.blocks.get(name);
       if (!block) return null;
-      return block.entities.map((sub) => { const c = cloneData(sub); inherit(c, e); return c; });
+      return block.entities.map((sub) => { const c = cloneData(sub); inherit(c, e, env); return c; });
     }
     case 'LWPOLYLINE': case 'POLYLINE2D': {
       const O = ocsOf(e);
@@ -965,23 +965,25 @@ export function explodeEntity(e, env) {
 
 /** Places a block entity: transform by M, then inherit from the reference. Returns true, a replacement, or false. */
 function place(ent, M, ref, env) {
-  const r = transformEntity(ent, M, { measure: env.measure });
+  // Dimension and table graphics blocks are moved with them (env.blockXform, see ops.explodeEntities).
+  const r = transformEntity(ent, M, { measure: env.measure, blockXform: env.blockXform, tableBlock: env.tableBlock });
   if (!r) return false;
   const out = r === true ? ent : r.replace;
-  inherit(out, ref);
-  if (out.type === 'INSERT') for (const a of out.attribs ?? []) inherit(a, ref);
+  inherit(out, ref, env);
+  if (out.type === 'INSERT') for (const a of out.attribs ?? []) inherit(a, ref, env);
   return r === true ? true : out;
 }
 
 /** Layer 0 and ByBlock properties come from the block reference. */
-function inherit(ent, ref) {
+function inherit(ent, ref, env = {}) {
   if ((ent.layer ?? '0') === '0') ent.layer = ref.layer ?? '0';
   if (ent.colorIndex === 0 && typeof ent.color !== 'number') {
     ent.colorIndex = ref.colorIndex ?? 256;
     if (typeof ref.color === 'number') ent.color = ref.color;
   }
   if (ent.lineType && /^byblock$/i.test(ent.lineType)) ent.lineType = ref.lineType || 'ByLayer';
-  if (ent.lineweight === -2 || ent.lineweight === 30) ent.lineweight = ref.lineweight;
+  // ByBlock lineweight: -2 (DXF), or index 30 in LibreDWG's DWG encoding (0.30 mm elsewhere).
+  if (ent.lineweight === -2 || (ent.lineweight === 30 && env.drawing?.source === 'dwg')) ent.lineweight = ref.lineweight;
 }
 
 function attribToText(a) {

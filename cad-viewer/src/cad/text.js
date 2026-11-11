@@ -59,3 +59,13 @@ export function decodeMText(s) {
   }
   return decodeText(out).replace(/\^I/g, '\t').replace(/\^J/g, '\n').split('\n');
 }
+
+/**
+ * Whether a TEXT/ATTRIB/ATTDEF is placed by its alignment point (code 11): aligned text that has
+ * one. DXF files say so explicitly (the point may be the origin, e.g. a tag centred on a block's
+ * base point); for other sources a point at the origin means "not given".
+ */
+export function hasAlignPoint(t) {
+  if (!(t.halign || t.valign) || !t.endPoint) return false;
+  return t.hasEndPoint ?? (t.endPoint.x !== 0 || t.endPoint.y !== 0);
+}

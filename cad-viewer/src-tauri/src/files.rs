@@ -400,6 +400,10 @@ pub async fn write_file(app: AppHandle, request: Request<'_>) -> Result<(), Stri
     if !app.state::<Session>().is_allowed(&path) && !recent::contains(&app, &path) {
         return Err(format!("{} was not opened by you, so it cannot be overwritten. Use Save As.", file_name(&path)));
     }
+    // Like AutoCAD, the previous version stays as <name>.bak next to the drawing.
+    if path.is_file() {
+        std::fs::copy(&path, path.with_extension("bak")).map_err(|e| format!("Could not keep a backup of {} (the drawing was not changed): {e}", file_name(&path)))?;
+    }
     write_replacing(&path, bytes).map_err(|e| format!("Could not save {}: {e}", path.display()))
 }
 

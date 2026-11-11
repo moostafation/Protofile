@@ -159,6 +159,7 @@ function textDefaults(e) {
   e.halign ??= 0;
   e.valign ??= 0;
   e.startPoint ??= { x: 0, y: 0, z: 0 };
+  e.hasEndPoint = !!e.endPoint; // code 11 present (the alignment point may be the origin)
   e.endPoint ??= { x: 0, y: 0, z: 0 };
   return e;
 }
@@ -176,7 +177,7 @@ function readAttrib(type, c) {
     switch (code) {
       case 10: t.startPoint.x = num(v); break;
       case 20: t.startPoint.y = num(v); break;
-      case 11: t.endPoint.x = num(v); break;
+      case 11: t.endPoint.x = num(v); t.hasEndPoint = true; break;
       case 21: t.endPoint.y = num(v); break;
       case 40: t.textHeight = num(v); break;
       case 1: t.text = v; break;
@@ -543,6 +544,55 @@ function readVertex(c) {
   return v;
 }
 
+/**
+ * MULTILEADER: the CONTEXT_DATA block holds what is drawn — LEADER sections (last leader line
+ * point, dogleg vector and length) with LEADER_LINE vertices, and the MText (contents, location,
+ * height, direction, rotation, width) — in the same fields as the DWG reader's.
+ */
+function readMLeader(c) {
+  const e = newEntity('MULTILEADER');
+  e.type = 'MULTILEADER';
+  e.leaderSections = [];
+  let where = 'entity', sec = null, line = null;
+  for (; !c.done; c.next()) {
+    const code = c.code, v = c.value;
+    if (code === 300 && v === 'CONTEXT_DATA{') { where = 'context'; continue; }
+    if (code === 301) { where = 'entity'; continue; }
+    if (code === 302 && v === 'LEADER{') { sec = { leaderLines: [] }; e.leaderSections.push(sec); where = 'leader'; continue; }
+    if (code === 303) { sec = null; where = 'context'; continue; }
+    if (code === 304 && v === 'LEADER_LINE{') { line = { vertices: [] }; sec?.leaderLines.push(line); where = 'line'; continue; }
+    if (code === 305) { line = null; where = 'leader'; continue; }
+    const P = () => ({ x: num(v), y: 0, z: 0 });
+    if (where === 'line') {
+      if (code === 10) line.vertices.push(P());
+      else if (code === 20 && line.vertices.length) line.vertices.at(-1).y = num(v);
+      else if (code === 30 && line.vertices.length) line.vertices.at(-1).z = num(v);
+    } else if (where === 'leader') {
+      if (code === 10) sec.lastLeaderLinePoint = P();
+      else if (code === 20 && sec.lastLeaderLinePoint) sec.lastLeaderLinePoint.y = num(v);
+      else if (code === 11) sec.doglegVector = P();
+      else if (code === 21 && sec.doglegVector) sec.doglegVector.y = num(v);
+      else if (code === 40) sec.doglegLength = num(v);
+    } else if (where === 'context') {
+      if (code === 41) e.textHeight = num(v);
+      else if (code === 140) e.arrowheadSize = num(v);
+      else if (code === 304) e.textContent = (e.textContent ?? '') + v;
+      else if (code === 12) e.textAnchor = P();
+      else if (code === 22 && e.textAnchor) e.textAnchor.y = num(v);
+      else if (code === 13) e.textDirection = P();
+      else if (code === 23 && e.textDirection) e.textDirection.y = num(v);
+      else if (code === 42) e.textRotation = num(v);
+      else if (code === 43) e.textWidth = num(v);
+      else if (code === 45) e.textLineSpacingFactor = num(v);
+      else if (code === 171) e.textAttachmentPoint = int(v);
+    } else if (!common(e, code, v)) {
+      if (code === 41) e.doglegLength = num(v);
+      else if (code === 42 && !e.arrowheadSize) e.arrowheadSize = num(v);
+    }
+  }
+  return e;
+}
+
 function readEntity(type, c) {
   if (SIMPLE[type]) {
     const e = simple(type, c, SIMPLE[type]);
@@ -561,6 +611,7 @@ function readEntity(type, c) {
     case 'LEADER': return readLeader(c);
     case 'WIPEOUT': case 'IMAGE': return readWipeout(type, c);
     case 'MLINE': return readMLine(c);
+    case 'MULTILEADER': case 'MLEADER': return readMLeader(c);
     case 'POLYLINE': return readPolylineHeader(c);
     default: {
       const e = newEntity(type);
@@ -595,6 +646,14 @@ export function parseDxf(buffer) {
   const blocks = new Map(); // name -> record
   const recordByHandle = new Map();
   const sections = new Set();
+  // The original records, so a DXF is saved back with everything the viewer does not model
+  // (header variables, table entries, xdata, objects, unsupported entities) unchanged.
+  const text = (s, e) => { let t = ''; for (let k = s; k < e; k++) t += `${codes[k]}\n${values[k]}\n`; return t; };
+  const raw = { order: [], sections: {}, header: [], tables: [], blocks: {}, maxHandle: 0 };
+  db.raw = raw;
+  for (let k = 0; k < codes.length; k++) {
+    if (codes[k] === 5 || codes[k] === 105) { const h = parseInt(values[k], 16); if (h > raw.maxHandle) raw.maxHandle = h; }
+  }
 
   let i = 0;
   const n = codes.length;
@@ -609,6 +668,8 @@ export function parseDxf(buffer) {
     if (codes[i] !== 0 || values[i] !== 'SECTION') { i++; continue; }
     const section = values[i + 1];
     sections.add(section);
+    raw.order.push(section);
+    const secStart = i + 2;
     i += 2;
     if (section === 'HEADER') {
       let name = null;
@@ -623,14 +684,28 @@ export function parseDxf(buffer) {
           } else if (code >= 1 && code <= 9) db.header[key] = v;
           else db.header[key] = num(v);
         }
+        raw.header.push([code, v]);
         i++;
       }
     } else if (section === 'TABLES') {
+      let table = null;
       while (i < n && !(codes[i] === 0 && values[i] === 'ENDSEC')) {
         if (codes[i] !== 0) { i++; continue; }
         const type = values[i];
         const end = recordEnd(i);
         const c = new Cursor(codes, values, i + 1, end);
+        if (type === 'TABLE') {
+          let name = '';
+          for (let k = i + 1; k < end; k++) if (codes[k] === 2) { name = values[k]; break; }
+          raw.tables.push(table = { type: name, head: text(i, end), records: [] });
+        } else if (type !== 'ENDTAB' && table) {
+          let name = '', handle = '';
+          for (let k = i + 1; k < end; k++) {
+            if (codes[k] === 2 && !name) name = values[k];
+            else if ((codes[k] === 5 || codes[k] === 105) && !handle) handle = values[k].trim().toUpperCase();
+          }
+          table.records.push({ type, name, handle, text: text(i, end) });
+        }
         if (type === 'LAYER') {
           const l = { name: '', colorIndex: 7, color: undefined, off: false, frozen: false, locked: false, lineweight: -3, lineType: 'Continuous', plotFlag: 1 };
           for (; !c.done; c.next()) {
@@ -684,12 +759,17 @@ export function parseDxf(buffer) {
     } else if (section === 'BLOCKS' || section === 'ENTITIES') {
       let current = null; // block record receiving entities (BLOCKS section)
       let parent = null; // POLYLINE or INSERT awaiting VERTEX/ATTRIB/SEQEND
+      let last = null; // { e, start }: the entity whose raw text runs until the next main record
+      const closeLast = (at) => { if (last) { last.e._raw = text(last.start, at); last = null; } };
+      let rawBlock = null;
       while (i < n && !(codes[i] === 0 && values[i] === 'ENDSEC')) {
         if (codes[i] !== 0) { i++; continue; }
         const type = values[i];
+        const start = i;
         const end = recordEnd(i);
         const c = new Cursor(codes, values, i + 1, end);
         i = end;
+        if (!['VERTEX', 'SEQEND'].includes(type) && !(type === 'ATTRIB' && parent?.type === 'INSERT')) closeLast(start);
         if (type === 'BLOCK') {
           const b = { name: '', flags: 0, basePoint: { x: 0, y: 0, z: 0 }, entities: [] };
           let owner = '';
@@ -714,9 +794,14 @@ export function parseDxf(buffer) {
           rec.basePoint = b.basePoint;
           rec.entities = [];
           current = rec;
+          rawBlock = raw.blocks[b.name] = { begin: text(start, end), end: '', count: 0 };
           continue;
         }
-        if (type === 'ENDBLK') { current = null; parent = null; continue; }
+        if (type === 'ENDBLK') {
+          if (rawBlock) { rawBlock.end = text(start, end); rawBlock.count = current?.entities.length ?? 0; }
+          current = null; parent = null; rawBlock = null;
+          continue;
+        }
         if (type === 'SEQEND') {
           if (parent && parent.type === 'POLYLINE') finishPolyline(parent);
           parent = null;
@@ -733,11 +818,13 @@ export function parseDxf(buffer) {
         if (parent && parent.type === 'POLYLINE') finishPolyline(parent);
         parent = null;
         const e = readEntity(type, c);
+        last = { e, start };
         if (type === 'POLYLINE') parent = e;
         else if (type === 'INSERT' && e.hasAttribs === 1) parent = e;
         if (current) current.entities.push(e);
         else db.entities.push(e);
       }
+      closeLast(i);
       if (parent && parent.type === 'POLYLINE') finishPolyline(parent);
     } else if (section === 'OBJECTS') {
       while (i < n && !(codes[i] === 0 && values[i] === 'ENDSEC')) {
@@ -760,6 +847,7 @@ export function parseDxf(buffer) {
     } else {
       while (i < n && !(codes[i] === 0 && values[i] === 'ENDSEC')) i++;
     }
+    if (section !== 'HEADER' && section !== 'TABLES' && section !== 'BLOCKS' && section !== 'ENTITIES') raw.sections[section] = text(secStart, i);
   }
 
   if (!sections.has('ENTITIES') && !sections.has('BLOCKS')) {

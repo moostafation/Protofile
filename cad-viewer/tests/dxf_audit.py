@@ -34,8 +34,9 @@ for path in files:
     problems = [f'error {e.code}: {e.message}' for e in auditor.errors]
     problems += [f'fix {e.code}: {e.message}' for e in auditor.fixes]
     problems += [f'recover: {e.message}' for e in rec.errors + rec.fixes]
-    if doc.dxfversion != 'AC1027':
-        problems.append(f'version {doc.dxfversion}, expected AC1027')
+    # New files are AutoCAD 2013 (AC1027); DXF sources saved by patching keep their own version (2000+).
+    if doc.dxfversion < 'AC1015':
+        problems.append(f'version {doc.dxfversion}, expected AutoCAD 2000 (AC1015) or later')
     if problems:
         failed += 1
         print('FAIL', name)

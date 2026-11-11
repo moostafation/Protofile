@@ -176,7 +176,24 @@ export function buildDrawing(db, source, fileName) {
   }
 
   const header = db.header ?? {};
+  // DXF sources keep their original records (see dxf-parser raw): untouched entities are saved
+  // back exactly as read. The text moves off the entities so edits and undo snapshots stay small.
+  let raw = null;
+  if (db.raw) {
+    raw = { ...db.raw, of: new WeakMap(), originals: new WeakSet() };
+    for (const l of layers.values()) l.rawName = l.name;
+    const take = (list) => {
+      for (const e of list) {
+        raw.originals.add(e);
+        for (const a of e.attribs ?? []) raw.originals.add(a);
+        if (e._raw !== undefined) { raw.of.set(e, e._raw); delete e._raw; }
+      }
+    };
+    take(db.entities ?? []);
+    for (const b of db.tables?.BLOCK_RECORD?.entries ?? []) take(b.entities ?? []);
+  }
   return {
+    raw,
     tableBlocks,
     warnings: db.warnings ?? [],
     source,
