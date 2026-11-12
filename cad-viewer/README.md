@@ -108,6 +108,11 @@ Dimensions and tables keep their graphics in an anonymous block: moving, rotatin
 
 **Checking saved files**: `npm run test:dxf` writes every test drawing as DXF, reads it back and compares it with the original, then audits the files with [ezdxf](https://ezdxf.mozman.at) (skipped when Python 3 with `pip install ezdxf` is not available). `DXF_SAMPLES=<folder> npm run test:dxf` adds the DWG/DXF files of a folder.
 
+### Markup (PDFs and images)
+The **Markup** bar (shown for PDFs and images; toolbar button *Markup* hides it) has Bluebeam-style review tools: **Pen** (freehand), **Line**, **Arrow**, **Rectangle**, **Ellipse**, **Revision cloud** (drag a rectangle, or the polygon cloud: click corners, double-click / Enter to finish), **Text box**, **Callout** (drag from the arrow tip to where the text goes), **Highlighter** (translucent), **Stamp** (APPROVED, REJECTED, FOR CONSTRUCTION or custom text, with author and date) and **Convert measurements** (turns the distance/path/area measurements on the page into markups with their value). Style: colour swatches or any colour, line width, fill (none, white, yellow, same as colour), opacity, text size and the author name. With the Select tool, click a markup to select it, drag it to move, drag a grip to resize, double-click a text box, callout or stamp to edit its text, `Del` deletes; `Ctrl+Z` / `Ctrl+Y` undo and redo markup changes. Markups are kept per page in page coordinates. The **Markups** side tab lists them (page, type, text, author, date; click to zoom to one) and exports the list as CSV.
+
+**Saving** (`Ctrl+S` or the Save menu on the Markup bar; Save dialog on the desktop, a download on the web): *Save marked-up PDF* writes the PDF with the markups as real PDF annotations with appearance streams — Square/Circle (rectangle, ellipse, highlight with opacity), Line with arrow ending, Ink (pen), Polygon with cloudy border (clouds), FreeText and FreeText callout, Stamp, Line/PolyLine/Polygon measurement annotations — so Acrobat, Bluebeam and browsers show them and can still edit them. *Save flattened PDF* draws them into the page content instead. For images the output is a PDF (picture page + annotations, real size for scans) or a flattened PNG. Opening a PDF saved here gives the markups back for editing; annotations from other programs are displayed. Print / Export PDF of a sheet includes the markups. Opening another file or closing with unsaved markups asks to save first. Limits: text uses Helvetica (characters outside Latin-1 become "?" in the PDF), on pages rotated in the PDF the annotation text stays unrotated, and page thumbnails do not show markups.
+
 ### Desktop program (Windows)
 **Install**
 1. Download the installer:
@@ -168,6 +173,7 @@ src/
               explode, new entities), edit operations (ops.js)
   tools/      picking and snapping index, select/measure/window tools, drawing and modify tools,
               command line parsing, analysis (search, BOM, summaries)
+  markup/     PDF/image markups: model, drawing and undo (markup.js), tools, PDF annotations (pdf-lib)
   ai/         Claude assistant with tool use
   ui/         icons, markdown rendering, colour picker, properties editor
   platform.js web/desktop differences (dialogs, saving, printing, OS file handling)

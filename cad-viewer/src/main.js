@@ -26,6 +26,8 @@ import { writeDxf } from './cad/dxf-writer.js';
 import { renderPropsEditor } from './ui/props-editor.js';
 import { openColorPicker, closeColorPicker } from './ui/color-picker.js';
 import { Assistant } from './ai/assistant.js';
+import { MarkupStore, drawMarkup, boxOf, bboxOf, clone, newId, textLayout, markupSummary, markupsCsv, TYPE_LABEL } from './markup/markup.js';
+import { MarkupSelectTool, MarkupDrawTool } from './markup/tools.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -59,6 +61,7 @@ const state = {
   editbar: prefs.editbar ?? window.innerWidth > 860, // the Draw/Modify bar is shown
   edit: null, // EditDoc of the open CAD drawing
   sheetScale: null, // calibrated { factor, unit } for PDFs and images
+  markups: null, // MarkupStore of the open PDF or image
   print: { paper: 'A3', orientation: 'auto', area: 'extents', scale: 'fit', color: 'mono', lw: true, stamp: true, window: null },
 };
 
@@ -434,6 +437,9 @@ function resetDocState() {
   state.measures.length = 0;
   state.sheetScale = null;
   state.edit = null;
+  state.markups = null;
+  mkEnv.selected = null;
+  document.querySelector('.mk-editor')?.remove();
   state.textHeight = null;
   state.offsetDist = null;
   closeColorPicker();
@@ -493,6 +499,7 @@ function activateSpace(i) {
 function setSheetDoc(kind, sheet) {
   resetDocState();
   state.doc = { kind, sheet };
+  initMarkups(sheet);
   updateNeeds();
   // Drop the previous drawing's layer and block lists (their handlers hold its scenes).
   buildLayerPanel();
@@ -594,6 +601,7 @@ function drawOverlay(o, v) {
       if (h.active) { o.strokeStyle = '#ff9f1c'; o.lineWidth = 2; o.strokeRect(x0 - 3, y0 - 3, x1 - x0 + 6, y1 - y0 + 6); }
     }
   }
+  drawMarkups(o, v);
   if (state.measures.length) drawMeasurements(o, v, state.measures, measureEnv);
   o.setTransform(1, 0, 0, 1, 0, 0);
 }
@@ -650,7 +658,11 @@ function setTool(name) {
   if (state.doc?.kind === '3d') {
     if (name === 'zoomWindow' || EDIT_TOOLS[name] || name.startsWith('measure:') && name !== 'measure:dist') name = currentTool = name.startsWith('measure:') ? 'measure:dist' : 'select';
     state.doc.view?.setTool(name);
-  } else if (name === 'select') viewer.setTool(new SelectTool(ed));
+  } else if (name === 'select' && isSheet()) viewer.setTool(new MarkupSelectTool(mkEnv));
+  else if (name.startsWith('mk:') && isSheet()) {
+    const type = name.slice(3);
+    viewer.setTool(new MarkupDrawTool(type === 'cloudPoly' ? 'cloud' : type, mkEnv, { cloud: type === 'cloudPoly' ? 'poly' : 'rect' }));
+  } else if (name === 'select' || name.startsWith('mk:')) viewer.setTool(new SelectTool(ed));
   else if (name === 'pan') viewer.setTool(new PanTool());
   else if (name === 'zoomWindow') viewer.setTool(new RectTool((bb) => { viewer.zoomToBox(bb, 0.02); setTool('select'); }, t('zoomWindow')));
   else if (name.startsWith('measure:')) viewer.setTool(new MeasureTool(name.slice(8), measureEnv));
@@ -802,6 +814,7 @@ function updateEditUi() {
   ub.title = e?.canUndo ? `${t('undo')}: ${e.undoLabel}` : t('undo');
   rb.title = e?.canRedo ? `${t('redo')}: ${e.redoLabel}` : t('redo');
   $('#editbar').hidden = state.doc?.kind !== 'cad' || !state.editbar;
+  updateMarkupUi();
   $('#editToggle').classList.toggle('active', state.editbar);
   $('#snapBtn').classList.toggle('on', state.snap);
   $('#orthoBtn').classList.toggle('on', state.ortho);
@@ -822,7 +835,7 @@ function updateEditUi() {
 function updateTitle() {
   const doc = state.doc;
   const name = doc?.kind === 'cad' ? doc.drawing.fileName : doc?.kind === '3d' ? doc.model.fileName : doc?.sheet?.fileName;
-  const modified = !!state.edit?.modified;
+  const modified = isModified();
   document.title = name ? `${modified ? '*' : ''}${name} – ProtoCAD Viewer` : 'ProtoCAD Viewer';
   platform.setModified(modified);
 }
@@ -854,6 +867,12 @@ function selectAll() {
 }
 
 function undo() {
+  if (state.markups && isSheet()) {
+    if (viewer.tool instanceof MarkupDrawTool && viewer.tool.pts.length) { viewer.tool.pts.pop(); viewer.renderOverlay(); return; } // the last cloud point first
+    const label = state.markups.undo();
+    toast(label ? `${t('undone')}: ${label}` : t('nothingToUndo'), false, 1600);
+    return;
+  }
   if (!state.edit) return;
   // Inside a command, Ctrl+Z first takes back the last point.
   if (viewer.tool?.undoPoint?.()) { viewer.renderOverlay(); updateCmdline(); return; }
@@ -862,6 +881,11 @@ function undo() {
 }
 
 function redo() {
+  if (state.markups && isSheet()) {
+    const label = state.markups.redo();
+    toast(label ? `${t('redone')}: ${label}` : t('nothingToRedo'), false, 1600);
+    return;
+  }
   if (!state.edit) return;
   const label = state.edit.redo();
   toast(label ? `${t('redone')}: ${label}` : t('nothingToRedo'), false, 1600);
@@ -1666,6 +1690,383 @@ $('#settingsDialog').addEventListener('close', () => {
   if (assistant.settings.apiKey) errs.forEach((e) => e.remove());
 });
 
+// ---------------------------------------------------------------- markups (PDFs and images)
+const MK_COLORS = ['#e11d48', '#f97316', '#16a34a', '#2563eb', '#7c3aed', '#111111'];
+const mkPrefs = (() => { try { return JSON.parse(localStorage.getItem('protocad.markup') || '{}'); } catch { return {}; } })();
+const mkStyle = {
+  color: mkPrefs.color || MK_COLORS[0], width: mkPrefs.width ?? 2, fill: mkPrefs.fill ?? '', opacity: mkPrefs.opacity ?? 1,
+  font: mkPrefs.font ?? 12, author: mkPrefs.author || 'Reviewer', stamp: 'APPROVED', stampText: '',
+};
+state.markupbar = mkPrefs.bar ?? true;
+function saveMkPrefs() {
+  try { localStorage.setItem('protocad.markup', JSON.stringify({ color: mkStyle.color, width: mkStyle.width, fill: mkStyle.fill, opacity: mkStyle.opacity, font: mkStyle.font, author: mkStyle.author, bar: state.markupbar })); } catch { /* storage unavailable */ }
+}
+
+/** World units per "point" of line width and text size: PDF points, or about 1/800 of a picture's longer side. */
+function mkUnit() {
+  const s = activeSheet();
+  if (!s || state.doc?.kind !== 'image') return 1;
+  return Math.max(s.width, s.height) / 800;
+}
+
+const mkEnv = {
+  viewer,
+  get store() { return state.markups; },
+  selected: null,
+  hide: null, // markup being dragged (drawn by the tool instead)
+  page: () => activeSheet()?.pageNo ?? 1,
+  style() {
+    const u = mkUnit();
+    return {
+      color: mkStyle.color, width: mkStyle.width * u, opacity: mkStyle.opacity, fontSize: mkStyle.font * u,
+      fill: mkStyle.fill === 'match' ? mkStyle.color : mkStyle.fill || null,
+      author: mkStyle.author, highlight: '#facc15',
+      stamp: mkStyle.stamp === 'custom' ? (mkStyle.stampText.trim() || 'CHECKED').toUpperCase() : mkStyle.stamp,
+    };
+  },
+  select(id) {
+    if (mkEnv.selected === id) return;
+    mkEnv.selected = id;
+    mkSelectionChanged();
+  },
+  created(m) {
+    // After a text box or callout the text is typed; the next click should not place another one.
+    if (m.type === 'text' || m.type === 'callout') setTool('select');
+    mkEnv.select(m.id);
+  },
+  editText: (m, isNew) => editMarkupText(m, isNew),
+};
+
+const isSheet = () => state.doc?.kind === 'pdf' || state.doc?.kind === 'image';
+const isModified = () => !!(state.edit?.modified || state.markups?.modified);
+
+function initMarkups(sheet) {
+  const store = new MarkupStore(sheet.loadedMarkups || []);
+  state.markups = store;
+  mkEnv.selected = null;
+  store.onChange(() => {
+    if (mkEnv.selected && !store.get(mkEnv.selected)) mkEnv.selected = null;
+    viewer.renderOverlay();
+    buildMarkupList();
+    updateEditUi();
+  });
+  buildMarkupList();
+  if (sheet.loadedMarkups?.length) toast(`${sheet.loadedMarkups.length} ${t('mkLoaded')}`);
+}
+
+function mkSelectionChanged() {
+  viewer.renderOverlay();
+  updateMarkupUi();
+  for (const li of $$('#mkList li')) li.classList.toggle('active', li.dataset.id === mkEnv.selected);
+  // The style controls show the selected markup's style.
+  const m = mkEnv.selected && state.markups?.get(mkEnv.selected);
+  if (m) {
+    const u = mkUnit();
+    $('#mkColor').value = m.color;
+    const w = String(Math.round((m.width / u) * 10) / 10);
+    if ([...$('#mkWidth').options].some((o) => o.value === w)) $('#mkWidth').value = w;
+    $('#mkOpacity').value = String(m.opacity ?? 1);
+    for (const b of $$('#mkSwatches button')) b.classList.toggle('cur', b.dataset.color === m.color);
+  }
+}
+
+function updateMarkupUi() {
+  const st = state.markups;
+  const bar = $('#markupbar');
+  bar.hidden = !isSheet() || !state.markupbar;
+  $('#markupToggle').classList.toggle('active', state.markupbar);
+  $('#mkUndoBtn').disabled = !st?.canUndo;
+  $('#mkRedoBtn').disabled = !st?.canRedo;
+  $('#mkDeleteBtn').disabled = !mkEnv.selected;
+  $('#mkSavePng').hidden = state.doc?.kind !== 'image';
+  $('#mkStampText').hidden = mkStyle.stamp !== 'custom';
+}
+
+/** Draws the markups of the shown page (overlay canvas, page coordinates). */
+function drawMarkups(o, v) {
+  const st = state.markups;
+  if (!st || !isSheet()) return;
+  const list = st.page(activeSheet().pageNo);
+  if (!list.length) return;
+  o.save();
+  v.applyTransform(o);
+  for (const m of list) if (m.id !== mkEnv.hide && m.id !== mkEnv.editing) drawMarkup(o, m);
+  o.restore();
+}
+
+/** Draws page `n`'s markups on a canvas showing world area `rect` (print, flattened PNG). */
+function drawMarkupsOn(canvas, rect, n) {
+  const list = state.markups?.page(n) || [];
+  if (!list.length) return canvas;
+  const ctx = canvas.getContext('2d');
+  const kx = canvas.width / (rect[2] - rect[0]), ky = canvas.height / (rect[3] - rect[1]);
+  ctx.save();
+  ctx.setTransform(kx, 0, 0, -ky, -rect[0] * kx, rect[3] * ky);
+  for (const m of list) drawMarkup(ctx, m);
+  ctx.restore();
+  return canvas;
+}
+
+/** The sheet as printed: its pictures with the markups drawn on top. */
+function sheetWithMarkups(sheet) {
+  if (!sheet || !state.markups?.items.length || state.doc?.kind !== 'image') return sheet;
+  return Object.assign(Object.create(sheet), {
+    renderArea: (rect, w, h) => drawMarkupsOn(sheet.renderArea(rect, w, h), rect, sheet.pageNo),
+    pageCanvas: (n, max) => { const r = sheet.pageCanvas(n, max); drawMarkupsOn(r.canvas, [0, 0, r.w, r.h], n); return r; },
+  });
+}
+
+/** In-place text editor over a text box, callout or stamp. */
+function editMarkupText(m, isNew) {
+  document.querySelector('.mk-editor')?.blur();
+  const b = boxOf(m);
+  const [x0, y0] = viewer.worldToScreen(b[0], b[3]);
+  const [x1, y1] = viewer.worldToScreen(b[2], b[1]);
+  const ta = document.createElement('textarea');
+  ta.className = 'mk-editor';
+  ta.value = m.text || '';
+  ta.placeholder = t('mkTextPrompt');
+  ta.spellcheck = true;
+  const fs = Math.max(9, (m.type === 'stamp' ? 14 : (m.fontSize || 12)) * viewer.view.scale);
+  Object.assign(ta.style, { left: `${x0}px`, top: `${y0}px`, width: `${Math.max(120, x1 - x0)}px`, height: `${Math.max(fs * 2, y1 - y0)}px`, fontSize: `${fs}px`, color: m.color });
+  viewer.host.append(ta);
+  mkEnv.editing = m.id;
+  viewer.renderOverlay();
+  let done = false;
+  const finish = (keep) => {
+    if (done) return;
+    done = true;
+    mkEnv.editing = null;
+    const text = ta.value.replace(/\s+$/, '');
+    ta.remove();
+    const cur = state.markups?.get(m.id);
+    if (!cur) return;
+    if (!keep) { if (isNew && !cur.text) state.markups.remove([m.id], 'Cancel text'); viewer.renderOverlay(); return; }
+    if (!text && m.type !== 'stamp') { state.markups.remove([m.id], isNew ? 'Cancel text' : 'Delete markup'); return; }
+    if (text === cur.text) { viewer.renderOverlay(); return; }
+    const next = clone(cur);
+    next.text = m.type === 'stamp' ? text.toUpperCase() : text;
+    if (m.type === 'text' || m.type === 'callout') growToFit(next);
+    state.markups.replace(next, 'Edit text');
+  };
+  ta.addEventListener('blur', () => finish(true));
+  ta.addEventListener('keydown', (ev) => {
+    ev.stopPropagation();
+    if (ev.key === 'Escape') { ev.preventDefault(); finish(false); }
+    else if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); finish(true); }
+  });
+  setTimeout(() => { ta.focus(); ta.select(); }, 0);
+}
+
+/** Makes a text box tall enough for its text (grows downward). */
+function growToFit(m) {
+  const c = document.createElement('canvas').getContext('2d');
+  const measure = (s, fs) => { c.font = `100px Helvetica, Arial, sans-serif`; return (c.measureText(s).width / 100) * fs; };
+  const L = textLayout(m, measure);
+  const need = L.lines.length * L.lh + 2 * L.pad;
+  const b = L.b;
+  if (b[3] - b[1] >= need) return;
+  const i = m.type === 'callout' ? 1 : 0;
+  m.pts[i] = [b[0], b[3] - need];
+  m.pts[i + 1] = [b[2], b[3]];
+}
+
+function buildMarkupList() {
+  const ul = $('#mkList');
+  if (!ul) return;
+  const list = state.markups?.all() || [];
+  $('#mkCount').textContent = list.length ? `${list.length} ${t('mkList').toLowerCase()}` : t('mkNone');
+  ul.innerHTML = '';
+  for (const m of list) {
+    const li = document.createElement('li');
+    li.dataset.id = m.id;
+    li.classList.toggle('active', m.id === mkEnv.selected);
+    const kind = m.type === 'measure' ? `${TYPE_LABEL.measure} (${m.mode})` : TYPE_LABEL[m.type];
+    const text = markupSummary(m);
+    const when = m.date ? new Date(m.date).toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' }) : '';
+    li.innerHTML = `<span class="swatch" style="background:${escapeHtml(m.color)}"></span><span class="name"><bdi>${escapeHtml(kind)}${text ? ': ' + escapeHtml(text) : ''}</bdi><span class="sub">${escapeHtml(m.author || '')}${when ? ' · ' + escapeHtml(when) : ''}</span></span><span class="tag">${t('page')} ${m.page}</span>`;
+    li.addEventListener('click', () => zoomToMarkup(m.id));
+    ul.append(li);
+  }
+}
+
+async function zoomToMarkup(id) {
+  const m = state.markups?.get(id);
+  if (!m) return;
+  if (m.page !== activeSheet().pageNo) await gotoPage(m.page);
+  const b = bboxOf(m);
+  const s = activeSheet().bbox;
+  // Show some of the sheet around small markups.
+  const minW = (s[2] - s[0]) / 6, minH = (s[3] - s[1]) / 6;
+  const cx = (b[0] + b[2]) / 2, cy = (b[1] + b[3]) / 2;
+  const w = Math.max(b[2] - b[0], minW) / 2, h = Math.max(b[3] - b[1], minH) / 2;
+  viewer.zoomToBox([cx - w, cy - h, cx + w, cy + h], 0.1);
+  if (currentTool !== 'select') setTool('select');
+  mkEnv.select(id);
+  closeSidebarOnMobile();
+}
+
+/** Applies a style control to the selected markup (one undo step). */
+function restyleSelected(fn) {
+  const m = mkEnv.selected && state.markups?.get(mkEnv.selected);
+  if (!m) return;
+  const next = clone(m);
+  fn(next, mkUnit());
+  state.markups.replace(next, 'Change style');
+}
+
+function setMkColor(c) {
+  mkStyle.color = c;
+  $('#mkColor').value = c;
+  for (const b of $$('#mkSwatches button')) b.classList.toggle('cur', b.dataset.color === c);
+  saveMkPrefs();
+  restyleSelected((m) => { if (m.type !== 'highlight') { if (m.fill && m.fill === m.color) m.fill = c; m.color = c; } else { m.color = c; m.fill = c; } });
+}
+
+function initMarkupBar() {
+  $('#mkSwatches').innerHTML = MK_COLORS.map((c) => `<button type="button" data-color="${c}" style="background:${c}" title="${c}"></button>`).join('');
+  $('#mkSwatches').addEventListener('click', (ev) => { const b = ev.target.closest('[data-color]'); if (b) setMkColor(b.dataset.color); });
+  $('#mkColor').addEventListener('input', (ev) => setMkColor(ev.target.value));
+  $('#mkColor').value = mkStyle.color;
+  for (const b of $$('#mkSwatches button')) b.classList.toggle('cur', b.dataset.color === mkStyle.color);
+  $('#mkWidth').value = String(mkStyle.width);
+  $('#mkFill').value = mkStyle.fill;
+  $('#mkOpacity').value = String(mkStyle.opacity);
+  $('#mkFont').value = String(mkStyle.font);
+  $('#mkAuthor').value = mkStyle.author;
+  const blurAfter = (el) => el.blur();
+  $('#mkWidth').addEventListener('change', (ev) => {
+    mkStyle.width = Number(ev.target.value); saveMkPrefs(); blurAfter(ev.target);
+    restyleSelected((m, u) => { if (m.type !== 'highlight') m.width = mkStyle.width * u; });
+  });
+  $('#mkFill').addEventListener('change', (ev) => {
+    mkStyle.fill = ev.target.value; saveMkPrefs(); blurAfter(ev.target);
+    restyleSelected((m) => { if (m.type !== 'highlight' && m.type !== 'stamp') m.fill = mkStyle.fill === 'match' ? m.color : mkStyle.fill || null; });
+  });
+  $('#mkOpacity').addEventListener('change', (ev) => {
+    mkStyle.opacity = Number(ev.target.value); saveMkPrefs(); blurAfter(ev.target);
+    restyleSelected((m) => { m.opacity = mkStyle.opacity; });
+  });
+  $('#mkFont').addEventListener('change', (ev) => {
+    mkStyle.font = Number(ev.target.value); saveMkPrefs(); blurAfter(ev.target);
+    restyleSelected((m, u) => { m.fontSize = mkStyle.font * u; if (m.type === 'text' || m.type === 'callout') growToFit(m); });
+  });
+  $('#mkAuthor').addEventListener('change', (ev) => { mkStyle.author = ev.target.value.trim() || 'Reviewer'; saveMkPrefs(); });
+  $('#mkStamp').addEventListener('change', (ev) => {
+    mkStyle.stamp = ev.target.value;
+    updateMarkupUi();
+    if (mkStyle.stamp === 'custom') $('#mkStampText').focus(); else blurAfter(ev.target);
+    setTool('mk:stamp');
+  });
+  $('#mkStampText').addEventListener('input', (ev) => { mkStyle.stampText = ev.target.value; });
+  $('#mkStampText').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.target.blur(); setTool('mk:stamp'); } });
+}
+
+/** Turns the finished measurements on this page into measurement markups. */
+function measuresToMarkups() {
+  const list = state.measures.filter((m) => m.mode !== 'calibrate');
+  if (!list.length) { toast(t('mkNoMeasures')); return; }
+  const tool = new MeasureTool('dist', measureEnv);
+  const st = mkEnv.style();
+  const page = mkEnv.page();
+  const made = list.map((ms) => ({
+    id: newId(), type: 'measure', mode: ms.mode, page, pts: ms.pts.map((p) => [...p]),
+    text: tool.describe(ms.mode, ms.pts).split('\n')[0], color: st.color, width: st.width, fill: null,
+    opacity: 1, fontSize: st.fontSize, author: st.author, date: new Date().toISOString(),
+  }));
+  state.markups.change(`Convert ${made.length} measurement(s)`, (it) => it.push(...made));
+  state.measures.length = 0;
+  viewer.renderOverlay();
+  toast(`${made.length} ${t('mkConverted')}`);
+}
+
+// ---------- saving marked-up files
+const baseName = () => activeSheet().fileName.replace(/\.[^.]+$/, '');
+
+/** Page images of an image document, for a PDF of it: [{ bytes, type, width, height }] in points. */
+async function imagePages(sheet) {
+  const pages = [];
+  for (let n = 1; n <= sheet.pageCount; n++) {
+    const { canvas, w, h } = n === sheet.pageNo ? { canvas: null, w: sheet.width, h: sheet.height } : sheet.pageCanvas(n, 16e6);
+    const k = Math.min(1, Math.sqrt(25e6 / (w * h)));
+    const c = canvas || sheet.renderArea([0, 0, w, h], Math.max(1, w * k), Math.max(1, h * k));
+    const photo = sheet.photo ?? (sheet.format === 'JPEG' || sheet.format === 'WEBP');
+    const blob = await new Promise((r) => c.toBlob(r, photo ? 'image/jpeg' : 'image/png', 0.92));
+    // Page size: the file's real size when known (scans), otherwise 96 pixels per inch; at most 200 in.
+    const mm = sheet.mmPerUnit;
+    let s = mm ? (mm * 72) / 25.4 : 0.75;
+    s = Math.min(s, 14400 / Math.max(w, h));
+    pages.push({ bytes: new Uint8Array(await blob.arrayBuffer()), type: photo ? 'jpg' : 'png', width: w * s, height: h * s, scale: s, n });
+  }
+  return pages;
+}
+
+/** The marked-up PDF: annotations (editable) or flattened into the pages. */
+async function markedPdfBytes(flatten) {
+  const { writeMarkedPdf } = await import('./markup/pdf-annots.js');
+  const sheet = activeSheet();
+  const st = state.markups;
+  if (state.doc.kind === 'pdf') {
+    const pages = [];
+    for (let n = 1; n <= sheet.pageCount; n++) {
+      const markups = st.page(n);
+      if (markups.length) pages.push({ index: n - 1, markups, map: await sheet.pdfMapper(n), scale: 1 });
+    }
+    return writeMarkedPdf({ source: new Uint8Array(sheet.buffer), pages, flatten });
+  }
+  const imgs = await imagePages(sheet);
+  return writeMarkedPdf({
+    image: imgs, flatten,
+    pages: imgs.map((im) => ({ index: im.n - 1, markups: st.page(im.n), map: (x, y) => [x * im.scale, y * im.scale], scale: im.scale })),
+  });
+}
+
+let mkSaving = null;
+/** "Save marked-up PDF" (kind 'pdf'), flattened PDF ('flat') or flattened PNG ('png'). Resolves to true when saved. */
+function saveMarkups(kind = 'pdf') {
+  if (!isSheet() || !state.markups) return Promise.resolve(false);
+  mkSaving ??= doSaveMarkups(kind).finally(() => { mkSaving = null; });
+  return mkSaving;
+}
+
+async function doSaveMarkups(kind) {
+  closeMenus();
+  const st = state.markups;
+  const version = st.version;
+  showLoading(t('mkSavingNow'));
+  try {
+    let blob, name, filters;
+    if (kind === 'png') {
+      const sheet = activeSheet();
+      const k = Math.min(1, Math.sqrt(40e6 / (sheet.width * sheet.height)));
+      const c = drawMarkupsOn(sheet.renderArea(sheet.bbox, Math.max(1, sheet.width * k), Math.max(1, sheet.height * k)), sheet.bbox, sheet.pageNo);
+      blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+      name = `${baseName()}-marked.png`;
+      filters = pngFilters();
+    } else {
+      const bytes = await markedPdfBytes(kind === 'flat');
+      blob = new Blob([bytes], { type: 'application/pdf' });
+      name = kind === 'flat' ? `${baseName()}-flattened.pdf` : state.doc.kind === 'pdf' ? activeSheet().fileName.replace(/\.[^.]+$/, '') + '.pdf' : `${baseName()}-marked.pdf`;
+      filters = pdfFilters();
+    }
+    showLoading(null);
+    const path = await platform.saveFile(blob, name, filters, { directory: docFolder() });
+    if (path === null) return false; // cancelled
+    // Only the editable PDF keeps the markups: it is what "saved" means for the prompt.
+    if (kind === 'pdf' && state.markups === st && st.version === version) st.markSaved();
+    toast(path ? `${t('savedTo')} ${path}` : `${t('mkSaved')}: ${name}`, false, 5000);
+    return true;
+  } catch (err) {
+    console.error(err);
+    toast(saveError(err), true, 7000);
+    return false;
+  } finally {
+    showLoading(null);
+  }
+}
+
+initMarkupBar();
+
 // ---------------------------------------------------------------- printing
 /** The print dialog; `toSave` (File > Export PDF) puts the focus on the save button. */
 function openPrint(toSave = false) {
@@ -1799,7 +2200,7 @@ function updatePrintPreview() {
 }
 
 /** What prints for page-like documents: the PDF/image, or the 3D view's snapshot. */
-const printSheet = () => (state.doc?.kind === '3d' ? state.snap3d : activeSheet());
+const printSheet = () => (state.doc?.kind === '3d' ? state.snap3d : sheetWithMarkups(activeSheet()));
 
 function makePlotPdf() {
   const sp = activeSpace();
@@ -1882,7 +2283,9 @@ $('#pPng').addEventListener('click', () => guarded(savePng));
 
 $('#pDownload').addEventListener('click', () => guarded(async () => {
   if (state.doc.kind === 'pdf') {
-    await saveAs(new Blob([state.doc.sheet.buffer], { type: 'application/pdf' }), state.doc.sheet.fileName, pdfFilters());
+    // With markups: the PDF with them as annotations.
+    const data = state.markups?.items.length ? await markedPdfBytes(false) : state.doc.sheet.buffer;
+    await saveAs(new Blob([data], { type: 'application/pdf' }), state.doc.sheet.fileName, pdfFilters());
     return;
   }
   await saveAs(makePlotPdf().output('blob'), pdfFileName(), pdfFilters());
@@ -1890,7 +2293,9 @@ $('#pDownload').addEventListener('click', () => guarded(async () => {
 
 $('#pPrint').addEventListener('click', () => guarded(async () => {
   const isPdf = state.doc.kind === 'pdf';
-  const blob = isPdf ? new Blob([state.doc.sheet.buffer], { type: 'application/pdf' }) : makePlotPdf().output('blob');
+  // Markups on a PDF print drawn into the pages (every PDF program prints them then).
+  const pdfData = isPdf && state.markups?.items.length ? await markedPdfBytes(true) : state.doc.sheet?.buffer;
+  const blob = isPdf ? new Blob([pdfData], { type: 'application/pdf' }) : makePlotPdf().output('blob');
   try {
     await platform.printPdf(blob, isPdf ? state.doc.sheet.fileName : pdfFileName());
   } catch (err) {
@@ -1915,6 +2320,11 @@ function onAction(action, el) {
     case 'select': setTool('select'); state.selection = []; view3d()?.select([]); selectionChanged(); break;
     case 'pan': setTool(currentTool === 'pan' ? 'select' : 'pan'); break;
     case 'toggleEditbar': state.editbar = !state.editbar; saveUiPrefs(); updateEditUi(); break;
+    case 'toggleMarkupbar': state.markupbar = !state.markupbar; saveMkPrefs(); updateMarkupUi(); break;
+    case 'mkSaveMenu': toggleMenu(el, '#mkSaveMenu'); break;
+    case 'mkDelete': if (mkEnv.selected) { state.markups.remove([mkEnv.selected]); mkEnv.select(null); } break;
+    case 'mkFromMeasure': measuresToMarkups(); break;
+    case 'mkCsv': if (state.markups) saveAs(new Blob(['\ufeff' + markupsCsv(state.markups.all())], { type: 'text/csv' }), `${baseName()}-markups.csv`, csvFilters()); break;
     case 'undo': undo(); break;
     case 'redo': redo(); break;
     case 'save': saveDrawing(false); break;
@@ -1966,6 +2376,8 @@ function onAction(action, el) {
     case 'toggleSidebar': $('#sidebar').classList.toggle('open'); break;
     default:
       if (action.startsWith('measure:')) { setTool(action); closeMenus(); }
+      else if (action.startsWith('mkSave:')) saveMarkups(action.slice(7));
+      else if (action.startsWith('mk:')) setTool(currentTool === action ? 'select' : action);
       else if (action.startsWith('cmd:')) runCommand(action.slice(4));
       else if (action.startsWith('view3d:')) { view3d()?.setView(action.slice(7)); closeMenus(); }
       else if (action.startsWith('sel3d:') && view3d()) {
@@ -2002,7 +2414,7 @@ function toggleMenu(btn, id) {
   menu.style.top = `${r.bottom + 4}px`;
   menu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8))}px`;
 }
-function closeMenus() { $('#measureMenu').hidden = true; $('#viewsMenu').hidden = true; $('#layerMenu').hidden = true; }
+function closeMenus() { $('#measureMenu').hidden = true; $('#viewsMenu').hidden = true; $('#layerMenu').hidden = true; $('#mkSaveMenu').hidden = true; }
 
 // On small screens the drawers close when the drawing is touched.
 for (const id of ['#viewport', '#viewport3d']) {
@@ -2040,7 +2452,7 @@ const TYPABLE = /^[\p{L}\p{N}\p{P}\p{S} ]$/u; // any letter, digit, punctuation 
 
 document.addEventListener('keydown', (ev) => {
   // An open menu closes first, even when its Snap checkbox has the focus.
-  if (ev.key === 'Escape' && (!$('#measureMenu').hidden || !$('#viewsMenu').hidden || !$('#layerMenu').hidden)) {
+  if (ev.key === 'Escape' && (!$('#measureMenu').hidden || !$('#viewsMenu').hidden || !$('#layerMenu').hidden || !$('#mkSaveMenu').hidden)) {
     closeMenus();
     if (ev.target.closest('.menu')) ev.target.blur();
     ev.preventDefault();
@@ -2060,6 +2472,11 @@ document.addEventListener('keydown', (ev) => {
     if (k === 'p' && state.doc) { ev.preventDefault(); openPrint(); return; }
     if (k === 'f' && state.doc) { ev.preventDefault(); setSideTab('search', true); $('#sidebar').classList.add('open'); return; }
     if (k === 's' && cad) { ev.preventDefault(); saveDrawing(ev.shiftKey); return; }
+    if (k === 's' && isSheet()) { ev.preventDefault(); saveMarkups('pdf'); return; }
+    if (isSheet() && !inField) {
+      if (k === 'z' && !ev.shiftKey) { ev.preventDefault(); undo(); return; }
+      if (k === 'y' || (k === 'z' && ev.shiftKey)) { ev.preventDefault(); redo(); return; }
+    }
     // Text fields keep their own undo and select-all (the empty command line does not).
     if (cad && (!inField || (cmdLine && !ev.target.value))) {
       if (k === 'z' && !ev.shiftKey) { ev.preventDefault(); undo(); return; }
@@ -2116,6 +2533,7 @@ document.addEventListener('keydown', (ev) => {
     closeMenus();
     state.selection = [];
     state.highlights = [];
+    mkEnv.select(null);
     selectionChanged();
   } else if ((ev.key === 'f' || ev.key === 'F' || ev.key === 'Home') && state.doc) zoomExtentsActive();
   else if ((ev.key === '+' || ev.key === '=') && state.doc) zoomActive(1.5);
@@ -2217,15 +2635,16 @@ function askLoss(summary, file) {
  * or the action is cancelled (false).
  */
 function confirmDiscard() {
-  if (!state.edit?.modified) return Promise.resolve(true);
+  document.querySelector('.mk-editor')?.blur(); // a text being typed is kept
+  if (!isModified()) return Promise.resolve(true);
   const dlg = $('#unsavedDialog');
   if (dlg.open) return Promise.resolve(false);
-  $('#unsavedText').textContent = t('unsavedText').replace('{file}', state.doc.drawing.fileName);
+  $('#unsavedText').textContent = t('unsavedText').replace('{file}', state.doc.drawing?.fileName ?? state.doc.sheet.fileName);
   dlg.returnValue = '';
   return new Promise((resolve) => {
     dlg.onclose = async () => {
       if (dlg.returnValue === 'discard') resolve(true);
-      else if (dlg.returnValue === 'save') resolve(await saveDrawing(false));
+      else if (dlg.returnValue === 'save') resolve(await (isSheet() ? saveMarkups('pdf') : saveDrawing(false)));
       else resolve(false);
     };
     dlg.showModal();
@@ -2235,7 +2654,7 @@ function confirmDiscard() {
 
 // Leaving the web page with unsaved changes asks first (the browser shows its own question).
 window.addEventListener('beforeunload', (ev) => {
-  if (state.edit?.modified) { ev.preventDefault(); ev.returnValue = ''; }
+  if (isModified()) { ev.preventDefault(); ev.returnValue = ''; }
 });
 // Desktop: closing the window (or Quit) with unsaved changes asks Save / Don't save / Cancel.
 platform.onCloseRequested(async () => {
@@ -2275,8 +2694,8 @@ function onMenu(id) {
   else if (!state.doc) return;
   else if (id === 'print') openPrint();
   else if (id === 'export-pdf') openPrint(true);
-  else if (id === 'save') saveDrawing(false);
-  else if (id === 'save-as') saveDrawing(true);
+  else if (id === 'save') { if (isSheet()) saveMarkups('pdf'); else saveDrawing(false); }
+  else if (id === 'save-as') { if (isSheet()) saveMarkups('pdf'); else saveDrawing(true); }
   else if (id === 'undo') undo();
   else if (id === 'redo') redo();
   else if (id === 'zoom-extents') zoomExtentsActive();
@@ -2374,4 +2793,4 @@ if (platform.isDesktop) initDesktop();
 if (new URLSearchParams(location.search).has('sample')) openSample();
 else if (new URLSearchParams(location.search).has('sample3d')) openSample('cooling-water.pcf', 'cooling-water-sample.pcf');
 platform.registerServiceWorker();
-window.protocad = { state, viewer, openFile, openHandedFiles, ed, ops, saveDrawing, setTool, runCommand, submitCommand, activeSpace, view3d, assistant, view3dStats: () => doc3dModule?.then((m) => m.viewerStats()) ?? null };
+window.protocad = { state, viewer, mkEnv, openFile, openHandedFiles, ed, ops, saveDrawing, setTool, runCommand, submitCommand, activeSpace, view3d, assistant, view3dStats: () => doc3dModule?.then((m) => m.viewerStats()) ?? null };

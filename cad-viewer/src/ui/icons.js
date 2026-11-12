@@ -62,6 +62,15 @@ const P = {
   list: '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1.2" fill="currentColor"/><circle cx="4.5" cy="12" r="1.2" fill="currentColor"/><circle cx="4.5" cy="18" r="1.2" fill="currentColor"/>',
   down: '<path d="M6 9l6 6 6-6"/>',
   more: '<circle cx="5" cy="12" r="1.3" fill="currentColor"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><circle cx="19" cy="12" r="1.3" fill="currentColor"/>',
+  pen: '<path d="M3 17c3-4 5-1 7-4s1-7 5-8 4 3 2 6-5 6-2 8 4-1 5-2"/>',
+  arrow: '<path d="M5 19 19 5M10 5h9v9"/>',
+  ellipse: '<ellipse cx="12" cy="12" rx="9" ry="6"/>',
+  highlight: '<path d="M4 15h16v5H4z" fill="currentColor" fill-opacity=".35" stroke="none"/><path d="M9 14l-1 3h4l-1-3M10 14V6l3-2v10"/>',
+  stamp: '<path d="M9 4h6v6l-1 2h5v4H5v-4h5l-1-2zM5 20h14"/>',
+  callout: '<path d="M10 4h11v9H10z"/><path d="M10 11 3 20M3 20v-4M3 20h4"/>',
+  cloudPoly: '<path d="M4 18 5 7l9-3 6 7-4 8z" stroke-dasharray="3 1.6"/>',
+  markup: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M14 20h6" />',
+  toMarkup: '<path d="M4 18 18 4"/><path d="M4 18l2-6M4 18l6-2"/><path d="M13 20h7M16.5 16.5v7" transform="translate(0 -3)"/>',
 };
 
 export function icon(name) {

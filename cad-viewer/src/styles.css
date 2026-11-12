@@ -419,3 +419,20 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
   .float-panel { top: auto; bottom: 44px; inset-inline-start: 8px; width: min(280px, calc(100% - 16px)); }
   .viewcube { transform: scale(0.85); transform-origin: top right; }
 }
+
+/* ---------- markup bar and list ---------- */
+.markupbar select, .markupbar input[type=text] { padding: 4px 6px; max-width: 120px; }
+.markupbar input[type=color] { width: 30px; height: 26px; padding: 0; border: 1px solid var(--line); background: none; margin-inline: 2px; }
+.mk-style { gap: 4px; }
+.mk-swatches { display: inline-flex; gap: 3px; }
+.mk-swatches button { width: 18px; height: 18px; padding: 0; border-radius: 50%; border: 1px solid rgba(127, 127, 127, 0.6); cursor: pointer; }
+.mk-swatches button.cur { outline: 2px solid var(--accent); outline-offset: 1px; }
+.mk-author { width: 96px; }
+.mk-stamp-text { width: 110px; }
+.mk-list .swatch { width: 10px; height: 10px; border-radius: 50%; flex: none; margin-inline-end: 6px; }
+.mk-list li.active { background: var(--panel-2); outline: 1px solid var(--accent); }
+.mk-editor {
+  position: absolute; z-index: 5; margin: 0; padding: 2px 4px; resize: none; overflow: hidden;
+  background: rgba(255, 255, 255, 0.96); color: #111; border: 1.5px dashed #0ea5e9; outline: none;
+  font-family: Helvetica, Arial, sans-serif; line-height: 1.2;
+}

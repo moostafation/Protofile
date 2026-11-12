@@ -6,7 +6,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node tests/scene.test.mjs public/samples/plant.dxf && node tests/formats.test.mjs && node tests/pcf.test.mjs && node tests/pdf-text.test.mjs && node tests/edit.test.mjs && node tests/dxf-writer.test.mjs && node tests/dxf-patch.test.mjs",
+    "test": "node tests/scene.test.mjs public/samples/plant.dxf && node tests/formats.test.mjs && node tests/pcf.test.mjs && node tests/pdf-text.test.mjs && node tests/edit.test.mjs && node tests/dxf-writer.test.mjs && node tests/dxf-patch.test.mjs && node tests/markup.test.mjs",
     "tauri": "tauri",
     "test:dxf": "node tests/dxf-audit.mjs"
   },
@@ -19,6 +19,7 @@
     "@tauri-apps/api": "2.12.4",
     "jspdf": "^4.2.1",
     "occt-import-js": "0.0.23",
+    "pdf-lib": "1.17.1",
     "pdfjs-dist": "^6.4.299",
     "three": "0.186.1",
     "utif2": "4.1.0",

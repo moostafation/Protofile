@@ -3,15 +3,32 @@
 import * as pdfjs from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { buildLines, findInLines } from './text-lines.js';
+import { mayHaveMarkups } from '../markup/markup.js';
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
 const MAX_PIXELS = 24e6;
 
 export async function openPdf(buffer, fileName) {
+  // Markups this app saved come back as editable markups (their annotations are taken out of
+  // the copy shown, so they are not drawn twice).
+  let markups = null;
+  if (mayHaveMarkups(buffer)) {
+    try {
+      const { extractMarkups } = await import('../markup/pdf-annots.js');
+      const r = await extractMarkups(buffer);
+      if (r) {
+        markups = r.markups;
+        buffer = r.bytes.buffer.slice(r.bytes.byteOffset, r.bytes.byteOffset + r.bytes.byteLength);
+      }
+    } catch (err) {
+      console.warn('Markups could not be read; the annotations are shown as they are.', err);
+    }
+  }
   const data = new Uint8Array(buffer.slice(0));
   const pdf = await pdfjs.getDocument({ data, isEvalSupported: false }).promise;
   const doc = new PdfDocument(pdf, fileName, buffer);
+  doc.loadedMarkups = markups;
   await doc.setPage(1);
   return doc;
 }
@@ -41,6 +58,13 @@ export class PdfDocument {
     this.base = this.cache = null;
     // pdf.js frees a document through the task that loaded it (also stops its worker).
     this.pdf.loadingTask?.destroy().catch(() => {});
+  }
+
+  /** Maps viewer coordinates of page `n` to PDF user space (for writing annotations). */
+  async pdfMapper(n) {
+    const page = n === this.pageNo ? this.page : await this.pdf.getPage(n);
+    const vp = page.getViewport({ scale: 1 });
+    return (x, y) => vp.convertToPdfPoint(x, vp.height - y);
   }
 
   async setPage(n) {
