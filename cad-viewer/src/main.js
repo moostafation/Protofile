@@ -2170,7 +2170,7 @@ async function doSave(saveAs) {
       if (answer === 'saveas') overwrite = false;
     }
     if (overwrite) {
-      await platform.writeFile(doc.path, blob); // keeps the previous file as <name>.bak
+      await platform.writeFile(doc.path, blob); // keeps the previous file as <name>.dxf.bak
       path = doc.path;
     } else {
       path = await platform.saveFile(blob, name, dxfFilters(), { directory: docFolder() });

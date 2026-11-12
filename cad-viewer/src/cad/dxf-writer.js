@@ -125,8 +125,32 @@ function graft(lines, original) {
       k = j;
     } else if (c >= 1000) { xdata.push(...o.slice(k, end)); break; }
   }
-  if (!groups.length && !xdata.length) return lines.join('\n');
   const out = lines.slice();
+  // Groups the model does not hold (thickness 39, transparency 440, material 347, plot style 390,
+  // shadow mode 284…) that the new record lacks are copied from the original, in their subclass.
+  const has = new Set();
+  let mainEnd = out.length;
+  for (let k = 2; k + 1 < out.length; k += 2) { const c = parseInt(out[k], 10); if (c === 0) { mainEnd = k; break; } has.add(c); }
+  const keep = (c) => (c === 39 || (c >= 140 && c < 1000 && ![210, 220, 230, 330, 360].includes(c))) && !has.has(c);
+  let sub = 'AcDbEntity';
+  const extra = [];
+  for (let k = 2; k + 1 < end; k += 2) {
+    const c = parseInt(o[k], 10);
+    if (c >= 1000) break;
+    if (c === 102) { while (k + 1 < end && !(parseInt(o[k], 10) === 102 && o[k + 1] === '}')) k += 2; continue; }
+    if (c === 100) sub = o[k + 1];
+    else if (keep(c)) extra.push([sub, o[k], o[k + 1]]);
+  }
+  for (const [subclass, c, v] of extra) {
+    // After the end of the same subclass in the new record (or of the main record).
+    let at = -1;
+    for (let k = 2; k + 1 < mainEnd; k += 2) if (parseInt(out[k], 10) === 100 && out[k + 1] === subclass) at = k + 2;
+    if (at < 0) at = mainEnd;
+    else while (at + 1 < mainEnd && parseInt(out[at], 10) !== 100) at += 2;
+    out.splice(at, 0, c, v);
+    mainEnd += 2;
+  }
+  if (!groups.length && !xdata.length) return out.join('\n');
   if (xdata.length) {
     let at = out.length;
     for (let k = 2; k + 1 < out.length; k += 2) if (parseInt(out[k], 10) === 0) { at = k; break; }
@@ -363,25 +387,37 @@ class DxfWriter {
     const brRecords = raw.tables.find((t) => t.type === 'BLOCK_RECORD')?.records ?? [];
     const brOf = (name) => brRecords.find((r) => r.name.toUpperCase() === String(name).toUpperCase())?.handle;
     const isModel = (n) => /^\*model_space$/i.test(n), isPaper = (n) => /^\*paper_space$/i.test(n);
+    const written = new Set(); // handles of original entities still in the drawing
     // Renamed layers: references in untouched records follow (code 8 on code lines only).
     const renames = new Map();
-    for (const l of d.layers.values()) if (l.rawName && l.rawName !== l.name) renames.set(l.rawName, l.name);
+    for (const l of d.layers.values()) if (l.rawName && l.rawName !== l.name) renames.set(l.rawName.toUpperCase(), l.name);
     const relayer = (t) => {
       if (!renames.size) return rawLines(t);
       const ln = rawLines(t).split('\n');
-      for (let k = 0; k + 1 < ln.length; k += 2) if (ln[k].trim() === '8' && renames.has(ln[k + 1])) ln[k + 1] = renames.get(ln[k + 1]);
+      // Layer names are case-insensitive (AutoCAD).
+      for (let k = 0; k + 1 < ln.length; k += 2) if (ln[k].trim() === '8' && renames.has(ln[k + 1].toUpperCase())) ln[k + 1] = renames.get(ln[k + 1].toUpperCase());
       return ln.join('\n');
     };
     const emit = (out, list, owner, paper) => {
       for (const e of list) {
         const text = raw.of.get(e);
         const edited = doc.dirty.has(e) || (e.attribs ?? []).some((x) => doc.dirty.has(x));
+        if (text !== undefined) written.add(String(e.handle).toUpperCase());
         if (text !== undefined && !edited) { out.raw(relayer(text)); this.report.kept++; continue; }
         try {
           if (text === undefined) { this.entity(out, e, owner, paper); continue; }
+          const before = this.report.summary();
+          const conv = new Map(this.report.converted), skip = new Map(this.report.skipped);
           const tmp = new Out();
           this.entity(tmp, e, owner, paper);
-          if (tmp.parts.length) out.raw(graft(tmp.parts, text)); // else reported as skipped
+          if (!tmp.parts.length || this.report.summary() !== before) {
+            // The writer would drop or convert this object: keep it exactly as read instead.
+            this.report.converted = conv; this.report.skipped = skip;
+            this.report.convert(`${e.type} kept as read (changes to it cannot be saved)`);
+            out.raw(relayer(text));
+            continue;
+          }
+          out.raw(graft(tmp.parts, text));
         } catch (err) { this.report.skip(`${e.type} (${err.message})`); }
       }
     };
@@ -399,9 +435,9 @@ class DxfWriter {
     for (const [name, rb] of Object.entries(raw.blocks)) {
       const b = d.blocks.get(name);
       if (!b) continue;
-      blocks.raw(rawLines(rb.begin));
+      blocks.raw(relayer(rb.begin));
       if (!isModel(name) && !isPaper(name)) emit(blocks, b.entities, brOf(name), /^\*paper_space/i.test(name));
-      blocks.raw(rawLines(rb.end));
+      blocks.raw(relayer(rb.end));
     }
     const fresh = [];
     for (const b of d.blocks.values()) {
@@ -438,10 +474,51 @@ class DxfWriter {
       else if (name === 'TABLES') parts.push(section(name, tables.text()));
       else if (name === 'BLOCKS') parts.push(section(name, blocks.text()));
       else if (name === 'ENTITIES') parts.push(section(name, ents.text()));
+      else if (name === 'OBJECTS') parts.push(section(name, this.pruneObjects(raw.sections[name] ?? '', [...(raw.entityHandles ?? [])].filter((h) => !written.has(h)))));
       else if (raw.sections[name] !== undefined) parts.push(section(name, raw.sections[name] ? rawLines(raw.sections[name]).split('\n').join('\r\n') + '\r\n' : ''));
     }
     parts[parts.indexOf(null)] = section('HEADER', this.patchedHeader().text());
-    return { text: parts.join('') + '  0\r\nEOF\r\n', report: this.report };
+    let out = parts.join('') + '  0\r\nEOF\r\n';
+    // Before AutoCAD 2007 a DXF is in the file's code page ($DWGCODEPAGE), not UTF-8: anything
+    // outside ASCII is written as \U+XXXX, which every version reads.
+    if (/^AC10(1[5-8])$/.test(String(d.header?.ACADVER))) out = out.replace(/[^\x00-\x7f]/gu, (c) => `\\U+${c.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}`);
+    return { text: out, report: this.report };
+  }
+
+  /**
+   * OBJECTS of a patched save: objects owned by erased entities (extension dictionaries, their
+   * records…) are dropped, and group members, dictionary entries and reactors pointing at them removed.
+   */
+  pruneObjects(text, erased) {
+    const lines = text ? rawLines(text).split('\n') : [];
+    const recs = [];
+    for (let k = 0; k + 1 < lines.length; k += 2) {
+      if (parseInt(lines[k], 10) === 0 || !recs.length) recs.push([]);
+      recs.at(-1).push([lines[k], lines[k + 1]]);
+    }
+    const gone = new Set(erased.map((h) => h.toUpperCase()));
+    const handleOf = (r) => r.find(([c]) => parseInt(c, 10) === 5)?.[1].trim().toUpperCase();
+    const ownerOf = (r) => { let inGroup = false; for (const [c, v] of r) { const n = parseInt(c, 10); if (n === 102) inGroup = v.startsWith('{'); else if (n === 330 && !inGroup) return v.trim().toUpperCase(); } return null; };
+    let grew = gone.size > 0;
+    while (grew) {
+      grew = false;
+      for (const r of recs) { const h = handleOf(r); if (h && !gone.has(h) && gone.has(ownerOf(r))) { gone.add(h); grew = true; } }
+    }
+    if (!gone.size) return text ? lines.join('\r\n') + '\r\n' : '';
+    const out = [];
+    for (const r of recs) {
+      if (gone.has(handleOf(r))) continue;
+      for (let k = 0; k < r.length; k++) {
+        const [c, v] = r[k];
+        const n = parseInt(c, 10);
+        const ref = gone.has(v.trim().toUpperCase());
+        if (ref && (n === 340 || n === 330 || n === 331)) continue; // group member, reactor, soft pointer
+        if (n === 3 && k + 1 < r.length && [350, 360].includes(parseInt(r[k + 1][0], 10)) && gone.has(r[k + 1][1].trim().toUpperCase())) { k++; continue; } // dictionary entry
+        if ((n === 350 || n === 360) && ref) continue;
+        out.push(c, v);
+      }
+    }
+    return out.join('\r\n') + '\r\n';
   }
 
   /** The original header with the handle seed, extents and current layer brought up to date. */
@@ -471,9 +548,13 @@ class DxfWriter {
   /** LAYER table records: original records with name, colour, on/off, frozen and lock updated; new layers added. */
   patchLayers(t, owner) {
     const byName = new Map(t.records.map((r) => [r.name.toUpperCase(), r]));
+    const used = new Set();
     const out = [];
     for (const l of this.d.layers.values()) {
-      const rec = byName.get(String(l.rawName ?? l.name).toUpperCase());
+      // Only a layer that came from the file has a record (a new layer may reuse a renamed one's name).
+      let rec = l.rawName !== undefined ? byName.get(String(l.rawName).toUpperCase()) : null;
+      if (rec && used.has(rec)) rec = null;
+      if (rec) used.add(rec);
       const aci = Math.abs(l.aci ?? 7) || 7;
       const color = l.on === false ? -aci : aci;
       const flags = (l.frozen ? 1 : 0) | (l.locked ? 4 : 0);

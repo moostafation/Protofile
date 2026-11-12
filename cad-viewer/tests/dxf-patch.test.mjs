@@ -12,6 +12,7 @@ import { buildDrawing } from '../src/cad/drawing.js';
 import { writeDxf, canPatch } from '../src/cad/dxf-writer.js';
 import { EditDoc } from '../src/edit/model.js';
 import { buildScene } from '../src/cad/scene.js';
+import * as ops from '../src/edit/ops.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const load = (file) => {
@@ -142,6 +143,59 @@ test('edited attribute values and moved block references are written (with their
   assert.ok(p.every(([c]) => Number.isInteger(c)), 'every code line is a number');
   const back = buildDrawing(parseDxf(new TextEncoder().encode(text).buffer), 'dxf', 'x.dxf');
   assert.equal(back.modelEntities.filter((e) => e.type === 'INSERT').length, d.modelEntities.filter((e) => e.type === 'INSERT').length);
+});
+
+test('review fixes: code page, kept groups, layer records, failed edits, block layers, erased references', () => {
+  const fx = (f) => path.join(here, 'fixtures', f);
+  // 1. R2000 files are ANSI: non-ASCII text is written as \U+XXXX.
+  {
+    const { d } = load(fx('patch-r2000.dxf'));
+    const doc = new EditDoc(d);
+    const t = d.modelEntities.find((e) => e.type === 'TEXT' || e.type === 'MTEXT');
+    doc.run('Text', (tx) => tx.modify(t, (e) => { e.text = 'Ø100 ±5°'; }));
+    const { text } = writeDxf(d, { doc });
+    assert.ok(/^[\x00-\x7f]*$/.test(text), 'ASCII only');
+    assert.ok(text.includes('\\U+00D8100 \\U+00B15\\U+00B0'));
+  }
+  const { d, text: src } = load(fx('patch-r2018.dxf'));
+  const doc = new EditDoc(d);
+  const line = d.modelEntities.find((e) => e.type === 'LINE');
+  const other = d.modelEntities.filter((e) => e.type === 'LINE')[1];
+  // 2. An edited line keeps thickness, transparency and other groups the model does not hold.
+  doc.run('Move', (tx) => tx.modify(line, (e) => { e.endPoint.x = 20; }));
+  // 3 + 5. Rename (case-insensitive) then a new layer with the old name: distinct records; block records follow.
+  doc.renameLayer('walls', 'W2');
+  doc.newLayer('WALLS', 4);
+  // 8. Erase a grouped line with an extension dictionary.
+  const ctx = { doc, drawing: d, container: d.modelEntities, measure: () => 1 };
+  ops.eraseEntities(ctx, [other]);
+  const { text } = writeDxf(d, { doc });
+  const p = pairs(text);
+  const i = p.findIndex(([c, v]) => c === 5 && v === line.handle);
+  const rec = []; for (let k = i; p[k][0] !== 0; k++) rec.push(p[k][0]);
+  for (const c of [39, 440]) if (pairs(src).some(([cc], k, all) => cc === c)) assert.ok(rec.includes(c), `group ${c} kept`);
+  const layerHandles = p.filter(([c], k, all) => c === 5 && all[k - 1]?.[1] === 'LAYER').map(([, v]) => v);
+  assert.equal(new Set(layerHandles).size, layerHandles.length, 'unique LAYER handles');
+  const blockLayers = p.filter(([c, v], k, all) => c === 8 && all.slice(Math.max(0, k - 6), k).some(([cc, vv]) => cc === 0 && vv === 'BLOCK'));
+  assert.ok(!blockLayers.some(([, v]) => v.toUpperCase() === 'WALLS') || d.layers.has('WALLS'), 'block records follow the rename');
+  const h = String(other.handle).toUpperCase();
+  assert.deepEqual(p.filter(([c, v]) => [330, 340, 350, 360].includes(c) && v.toUpperCase() === h), [], 'no references to the erased line');
+  auditOk(text, 'review');
+});
+
+test('failed transforms leave unsupported objects as read', () => {
+  const { d } = load(path.join(here, 'fixtures', 'autocad-rich.dxf'));
+  const doc = new EditDoc(d);
+  const ctx = { doc, drawing: d, container: d.modelEntities, measure: () => 1 };
+  const solid = d.modelEntities.find((e) => e.type === '3DSOLID');
+  const failed = ops.transformEntities(ctx, [solid], [1, 0, 0, 1, 5, 5]);
+  assert.equal(failed, 1);
+  assert.ok(!doc.dirty.has(solid), 'not marked edited');
+  // Edited anyway (e.g. layer change): kept as read rather than dropped, and reported.
+  doc.run('Layer', (tx) => tx.modify(solid, (e) => { e.layer = 'PIPE'; }));
+  const { text, report } = writeDxf(d, { doc });
+  assert.equal(pairs(text).filter(([c, v]) => c === 0 && v === '3DSOLID').length, 1);
+  assert.match(report.summary(), /3DSOLID kept as read/);
 });
 
 test('text aligned at the origin (P1-3): parsed, drawn and written at its alignment point', () => {

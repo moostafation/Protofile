@@ -112,6 +112,8 @@ export function transformEntities(ctx, ents, M, label = 'Move') {
     const env = envFor(ctx, tx, sharedBlocks(ctx, ents));
     for (const e of ents) {
       let res = true;
+      // Objects that cannot be transformed (3D solids, tilted OCS…) are left alone, not marked edited.
+      if (!transformEntity(cloneData(e), M, { measure: ctx.measure })) { failed++; continue; }
       // Replacements (circle -> ellipse) only happen for non-uniform scales, which the tools never use.
       tx.modify(e, (x) => { res = transformEntity(x, M, env); }, { container: ctx.container });
       if (!res || res.replace) failed++;

@@ -169,6 +169,9 @@ export class EditDoc {
 
   renameLayer(from, to) {
     to = to.trim();
+    // Layer names are case-insensitive (AutoCAD): "walls" finds "WALLS".
+    if (!this.d.layers.has(from)) from = [...this.d.layers.keys()].find((k) => k.toLowerCase() === String(from).toLowerCase()) ?? from;
+    if (!this.d.layers.has(from)) throw new Error(`There is no layer "${from}".`);
     if (from === to) return;
     if (RESERVED_LAYERS.has(from.toUpperCase())) throw new Error(`Layer "${from}" cannot be renamed.`);
     const err = this.checkLayerName(to, from);

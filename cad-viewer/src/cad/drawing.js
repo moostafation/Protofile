@@ -180,11 +180,12 @@ export function buildDrawing(db, source, fileName) {
   // back exactly as read. The text moves off the entities so edits and undo snapshots stay small.
   let raw = null;
   if (db.raw) {
-    raw = { ...db.raw, of: new WeakMap(), originals: new WeakSet() };
+    raw = { ...db.raw, of: new WeakMap(), originals: new WeakSet(), entityHandles: new Set() };
     for (const l of layers.values()) l.rawName = l.name;
     const take = (list) => {
       for (const e of list) {
         raw.originals.add(e);
+        if (e.handle) raw.entityHandles.add(String(e.handle).toUpperCase());
         for (const a of e.attribs ?? []) raw.originals.add(a);
         if (e._raw !== undefined) { raw.of.set(e, e._raw); delete e._raw; }
       }

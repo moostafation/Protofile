@@ -400,11 +400,33 @@ pub async fn write_file(app: AppHandle, request: Request<'_>) -> Result<(), Stri
     if !app.state::<Session>().is_allowed(&path) && !recent::contains(&app, &path) {
         return Err(format!("{} was not opened by you, so it cannot be overwritten. Use Save As.", file_name(&path)));
     }
-    // Like AutoCAD, the previous version stays as <name>.bak next to the drawing.
+    // The previous version stays as <name>.dxf.bak next to the drawing (AutoCAD's own <name>.bak is left alone).
     if path.is_file() {
-        std::fs::copy(&path, path.with_extension("bak")).map_err(|e| format!("Could not keep a backup of {} (the drawing was not changed): {e}", file_name(&path)))?;
+        write_backup(&path).map_err(|e| format!("Could not keep a backup of {} (the drawing was not changed): {e}", file_name(&path)))?;
     }
     write_replacing(&path, bytes).map_err(|e| format!("Could not save {}: {e}", path.display()))
+}
+
+/// Path of the backup kept when a drawing is overwritten: plant.dxf -> plant.dxf.bak.
+fn backup_path(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".bak");
+    PathBuf::from(name)
+}
+
+/// Copies the drawing to its backup: the old backup is removed first (a symbolic link is removed,
+/// never followed) and the new one is created fresh.
+fn write_backup(path: &Path) -> std::io::Result<PathBuf> {
+    let bak = backup_path(path);
+    match std::fs::remove_file(&bak) {
+        Err(e) if e.kind() != ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    let bytes = std::fs::read(path)?;
+    let mut f = OpenOptions::new().write(true).create_new(true).open(&bak)?;
+    f.write_all(&bytes)?;
+    f.sync_all()?;
+    Ok(bak)
 }
 
 fn write_replacing(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
@@ -566,6 +588,30 @@ mod tests {
         assert!(sibling_path(&model, "sub\\pump.mtl").is_err());
         assert!(sibling_path(&model, "C:pump.mtl").is_err());
         assert!(sibling_path(&model, "missing.png").is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn backups_keep_the_full_name_and_never_follow_links() {
+        let dir = std::env::temp_dir().join(format!("protocad-bak-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dxf = dir.join("plant.dxf");
+        std::fs::write(&dxf, b"v1").unwrap();
+        std::fs::write(dir.join("plant.bak"), b"autocad").unwrap();
+        assert_eq!(write_backup(&dxf).unwrap(), dir.join("plant.dxf.bak"));
+        assert_eq!(std::fs::read(dir.join("plant.bak")).unwrap(), b"autocad", "AutoCAD's backup untouched");
+        std::fs::write(&dxf, b"v2").unwrap();
+        write_backup(&dxf).unwrap();
+        assert_eq!(std::fs::read(dir.join("plant.dxf.bak")).unwrap(), b"v2", "old backup replaced");
+        #[cfg(unix)]
+        {
+            let target = dir.join("target.txt");
+            std::fs::write(&target, b"keep").unwrap();
+            std::fs::remove_file(dir.join("plant.dxf.bak")).unwrap();
+            std::os::unix::fs::symlink(&target, dir.join("plant.dxf.bak")).unwrap();
+            write_backup(&dxf).unwrap();
+            assert_eq!(std::fs::read(&target).unwrap(), b"keep", "the link target is not written");
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
