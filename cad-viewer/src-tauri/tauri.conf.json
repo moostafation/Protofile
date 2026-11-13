@@ -1,6 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "ProtoCAD Viewer",
+  "mainBinaryName": "protocad-viewer",
   "version": "../package.json",
   "identifier": "com.protocad.viewer",
   "build": {
