@@ -144,7 +144,7 @@ export class Viewer {
     this.interacting = true;
     this.render(false);
     clearTimeout(this.idleTimer);
-    this.idleTimer = setTimeout(() => { this.interacting = false; this.render(true); }, 140);
+    this.idleTimer = setTimeout(() => { this.interacting = false; this.render(true); }, 120);
   }
 
   // ---------- rendering ----------
@@ -225,7 +225,8 @@ export class Viewer {
       this.applyTransform(ctx);
       this.doc.draw(ctx, { scale: this.view.scale, bounds: this.visibleBounds(), dpr: this.dpr, viewer: this }, this.theme);
       const dt = performance.now() - t0;
-      this.slow = dt > 28;
+      // Anything that can't keep up with a 120 Hz gesture uses the cached frame while moving.
+      this.slow = dt > 8;
       // Keep a copy for fast pan/zoom feedback.
       const s = this.snapshot;
       if (s.width !== this.canvas.width || s.height !== this.canvas.height) { s.width = this.canvas.width; s.height = this.canvas.height; }
