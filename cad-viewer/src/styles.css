@@ -98,16 +98,47 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .tb:disabled { opacity: 0.4; cursor: default; background: transparent; }
 .eb-layer select { max-width: 200px; padding: 5px 8px; }
 
-/* ---------- command line ---------- */
+/* ---------- command window (docked above the status bar) ---------- */
+.stage { --cmd-h: 0px; }
 .cmdbar {
-  position: absolute; left: 50%; transform: translateX(-50%); bottom: 42px; z-index: 20;
-  display: flex; align-items: center; gap: 8px; width: min(720px, calc(100% - 24px));
-  padding: 6px 8px; background: color-mix(in srgb, var(--panel) 94%, transparent); border: 1px solid var(--line);
-  border-radius: var(--radius); box-shadow: var(--shadow); font-size: 13px;
+  position: absolute; left: 0; right: 0; bottom: 34px; z-index: 20; display: flex; flex-direction: column;
+  background: var(--panel); border-top: 1px solid var(--line); font: 12px/18px ui-monospace, Consolas, "Cascadia Mono", monospace;
 }
+.cmd-grip { position: absolute; top: -4px; left: 0; right: 0; height: 7px; cursor: ns-resize; z-index: 1; touch-action: none; }
+.cmd-hist {
+  height: calc(var(--cmd-rows, 3) * 18px); overflow-y: auto; padding: 3px 10px 3px 36px; color: var(--muted);
+  white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; scrollbar-width: thin;
+}
+.cmdbar.collapsed .cmd-hist { display: none; }
+.cmdbar.expanded .cmd-hist {
+  position: absolute; bottom: 32px; left: 0; right: 0; height: min(60vh, 420px); background: var(--panel);
+  border-top: 1px solid var(--line); box-shadow: var(--shadow);
+}
+.cmd-l.echo { color: var(--text); opacity: 0.8; }
+.cmd-l.result { color: var(--text); }
+.cmd-l.error { color: var(--danger); }
+.cmd-line { position: relative; display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 8px 0 6px; border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+.cmdbar.collapsed .cmd-line { border-top: 0; }
+.cmd-toggle { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: 0; border-radius: 4px; background: none; color: var(--muted); cursor: pointer; }
+.cmd-toggle:hover { background: var(--panel-2); color: var(--text); }
+.cmd-toggle svg { transition: transform 0.15s; }
+.cmdbar:not(.collapsed) .cmd-toggle svg { transform: rotate(180deg); }
 .cmdbar label { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; min-width: 0; }
-.cmdbar input { flex: 1 1 140px; min-width: 90px; padding: 5px 8px; font-family: ui-monospace, Consolas, monospace; }
+.cmd-opt { border: 0; background: none; padding: 0 1px; font: inherit; color: var(--accent); cursor: pointer; border-radius: 3px; }
+.cmd-opt:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); text-decoration: underline; }
+.cmdbar input { flex: 1 1 140px; min-width: 90px; padding: 3px 6px; font: inherit; border-color: transparent; background: var(--panel-2); }
+.cmdbar input:focus { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
 .cmdbar.bad input { border-color: var(--danger); }
+.cmdbar.collapsed.flash label { color: var(--accent); }
+.cmd-suggest {
+  position: absolute; bottom: 34px; left: 36px; z-index: 30; margin: 0; padding: 4px 0; list-style: none; min-width: 300px; max-width: calc(100% - 44px);
+  max-height: 220px; overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
+}
+.cmd-suggest li { display: flex; gap: 8px; align-items: baseline; padding: 2px 10px; cursor: pointer; white-space: nowrap; }
+.cmd-suggest li.active, .cmd-suggest li:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.cmd-suggest b { color: var(--text); font-weight: 600; min-width: 64px; }
+.cmd-alias { color: var(--accent); min-width: 36px; }
+.cmd-desc { color: var(--muted); font-family: system-ui, sans-serif; overflow: hidden; text-overflow: ellipsis; }
 .stat-btn {
   border: 1px solid var(--line); background: none; color: var(--muted); border-radius: 4px; padding: 1px 7px;
   font-size: 11px; font-weight: 700; letter-spacing: 0.4px; cursor: pointer; flex: none;
@@ -159,7 +190,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .sidebar { width: 290px; border-inline-end: 1px solid var(--line); }
 .rightbar { width: 380px; border-inline-start: 1px solid var(--line); }
 .stage { flex: 1; position: relative; min-width: 0; overflow: hidden; }
-.viewport { position: absolute; inset: 0 0 34px 0; overflow: hidden; background: #1d2127; }
+.viewport { position: absolute; inset: 0 0 calc(34px + var(--cmd-h, 0px)) 0; overflow: hidden; background: #1d2127; }
 .view-canvas, .view-overlay { position: absolute; inset: 0; display: block; }
 
 .tabs { display: flex; gap: 2px; padding: 6px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
@@ -270,7 +301,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 .spinner { width: 42px; height: 42px; border-radius: 50%; border: 4px solid rgba(255, 255, 255, 0.2); border-top-color: var(--accent); animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .toast {
-  position: absolute; bottom: 50px; left: 50%; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--line);
+  position: absolute; bottom: calc(50px + var(--cmd-h, 0px)); left: 50%; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--line);
   padding: 10px 16px; border-radius: var(--radius); box-shadow: var(--shadow); z-index: 45; max-width: min(90%, 520px);
 }
 .toast.error { border-color: var(--danger); }
@@ -411,10 +442,11 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
   .print-preview { min-height: 200px; }
   .editbar { padding-inline: 6px; }
   .eb-label { display: none; }
-  .cmdbar { bottom: 40px; font-size: 12px; flex-wrap: wrap; gap: 4px 8px; }
-  /* The round buttons move above the command line while it is shown. */
-  .cmdbar:not([hidden]) ~ .fab { bottom: 124px; }
+  /* The round buttons and toasts stay above the docked command window. */
+  .fab { bottom: calc(46px + var(--cmd-h, 0px)); }
+  .cmd-line { height: auto; min-height: 32px; flex-wrap: wrap; padding-block: 3px; }
   .cmdbar label { white-space: normal; }
+  .cmd-suggest { min-width: 0; left: 8px; right: 8px; }
   .stat-btn { padding: 1px 4px; }
   .float-panel { top: auto; bottom: 44px; inset-inline-start: 8px; width: min(280px, calc(100% - 16px)); }
   .viewcube { transform: scale(0.85); transform-origin: top right; }

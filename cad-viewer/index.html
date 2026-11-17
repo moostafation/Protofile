@@ -267,9 +267,15 @@
         <div class="drop-hint" id="dropHint"><span data-i18n="dropHere"></span></div>
         <div class="loading" id="loading" hidden><div class="spinner"></div><span id="loadingText"></span></div>
         <div class="toast" id="toast" hidden></div>
-        <div class="cmdbar" id="cmdbar" hidden>
-          <label for="cmdInput" id="cmdPrompt"></label>
-          <input id="cmdInput" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" dir="ltr" enterkeyhint="go" />
+        <div class="cmdbar" id="cmdbar" dir="ltr" hidden>
+          <div class="cmd-grip" id="cmdGrip" title="Drag to resize the command history"></div>
+          <div class="cmd-hist" id="cmdHist" role="log" aria-live="polite"></div>
+          <div class="cmd-line">
+            <button type="button" class="cmd-toggle" id="cmdToggle" title="Command history (F2 expands)" aria-label="Command history"><svg viewBox="0 0 16 16" width="14" height="14"><path d="M4 10l4-4 4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            <label for="cmdInput" id="cmdPrompt"></label>
+            <input id="cmdInput" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" dir="ltr" enterkeyhint="go" />
+            <ul class="cmd-suggest" id="cmdSuggest" role="listbox" hidden></ul>
+          </div>
         </div>
         <div class="bottom-bar" data-needs="doc">
           <div class="space-tabs" id="spaceTabs"></div>

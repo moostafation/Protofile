@@ -330,7 +330,10 @@ export class SelectTool {
 
 /** Pan tool: left-drag pans (for touchpads without a middle button). */
 export class PanTool {
-  constructor() { this.cursor = 'grab'; }
+  constructor(done) { this.cursor = 'grab'; this.done = done; }
+  get prompt() { return this.done ? 'PAN  Drag to pan. Press Esc or Enter to exit.' : ''; }
+  input() { this.done?.(); return true; }
+  key(ev) { if (ev.key === 'Enter' && this.done) { this.done(); return true; } return false; }
 }
 
 // ------------------------------------------------------------------ drawing tools

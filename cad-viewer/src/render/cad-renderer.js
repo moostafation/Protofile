@@ -210,6 +210,10 @@ export class CadRenderer {
    */
   draw(ctx, view, o) {
     const px = 1 / view.scale; // one CSS pixel in world units
+    const dpr = view.dpr || 1;
+    const hair = (0.999 * px) / dpr; // just under one device pixel: a hairline
+    const thin = dpr < 2.5 || this.scene.prims.length > 20000;
+    this.thinPx = thin ? hair : px; // width of 1-CSS-pixel detail lines (hatch patterns, viewport frames)
     const vb = view.bounds;
     const visible = (bb) => bb[2] >= vb[0] && bb[0] <= vb[2] && bb[3] >= vb[1] && bb[1] <= vb[3];
     const itemHidden = this.itemHiddenFn(o);
@@ -240,7 +244,11 @@ export class CadRenderer {
         if (o.hidden(b.layer) || o.hidden(b.top)) continue;
         ctx.strokeStyle = colorCss(b.rgb, o.theme);
         const cssW = b.ww > 0 ? Math.max(b.ww / px, 1) : o.showLw ? lwPx(b.lw) : 1;
-        ctx.lineWidth = cssW * px;
+        // Thin lines are drawn as 1-device-pixel hairlines: Skia rasterises those directly, while a 1.5 or
+        // 2 px stroke (1 CSS px at 150 % / 200 % scaling) goes through the path stroker and costs about ten
+        // times as much on large drawings. Phones (dpr >= 2.5) keep 1 CSS px for small drawings, where
+        // hairlines would look faint and speed does not matter.
+        ctx.lineWidth = cssW * dpr < 2 || (cssW <= 1 && thin) ? hair : cssW * px;
         if (b.dash && b.dash.reduce((a, v) => a + v, 0) / px > 4) ctx.setLineDash(b.dash);
         else ctx.setLineDash([]);
         ctx.stroke(b.path);
@@ -298,7 +306,7 @@ export class CadRenderer {
         for (let i = 0; i < s.length; i += 4) { p._segs.moveTo(s[i], s[i + 1]); p._segs.lineTo(s[i + 2], s[i + 3]); }
       }
       ctx.strokeStyle = colorCss(p.rgb, o.theme);
-      ctx.lineWidth = px;
+      ctx.lineWidth = this.thinPx || px;
       ctx.stroke(p._segs);
     }
     ctx.restore();

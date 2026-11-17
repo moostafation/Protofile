@@ -13,12 +13,13 @@ import { UNIT_NAMES } from './cad/drawing.js';
 import { polygonArea } from './cad/geometry.js';
 import { PickIndex } from './tools/pick.js';
 import { analyze, annotateItem, search, bomCsv, layersCsv, drawingSummary, formatNum } from './tools/analysis.js';
-import { RectTool, MeasureTool, drawMeasurements, formatLength, formatArea } from './tools/tools.js';
+import { RectTool, ZoomTool, MeasureTool, drawMeasurements, formatLength, formatArea } from './tools/tools.js';
 import {
   SelectTool, PanTool, LineTool, PolylineTool, RectangleTool, CircleTool, ArcTool, TextTool, RevCloudTool,
   MoveTool, RotateTool, ScaleTool, MirrorTool, OffsetTool, ImmediateTool,
 } from './tools/edit-tools.js';
-import { ALIASES } from './tools/cmdline.js';
+import { ALIASES, COMMANDS, suggest, parsePoint } from './tools/cmdline.js';
+import { CommandWindow } from './ui/command-window.js';
 import { EditDoc } from './edit/model.js';
 import { gripsOf } from './edit/entities.js';
 import * as ops from './edit/ops.js';
@@ -184,7 +185,7 @@ const ed = {
     o.setTransform(1, 0, 0, 1, 0, 0);
   },
   typed() { return $('#cmdInput').value; },
-  message(text) { toast(text); },
+  message(text) { toast(text); cmdLog(text); },
   done() { setTool('select'); },
   refresh() { viewer.renderOverlay(); updateCmdline(); },
   textHeight() { return state.textHeight ?? (state.doc.drawing.header.TEXTSIZE > 0 ? state.doc.drawing.header.TEXTSIZE : 2.5); },
@@ -208,7 +209,19 @@ const measureEnv = {
     return sp.pick.snap(w[0], w[1], 12 / v.view.scale, isHidden);
   },
   units: () => measureUnits(),
-  onDone: () => viewer.renderOverlay(),
+  // CAD drawings: prompts and typed points in the command window.
+  prompts: () => state.doc?.kind === 'cad',
+  typedPoint: (text, base) => {
+    const o = activeSpace()?.scene.origin ?? { x: 0, y: 0 };
+    const p = parsePoint(text, { base: base ? [base[0] + o.x, base[1] + o.y] : null });
+    return p ? [p[0] - o.x, p[1] - o.y] : null;
+  },
+  exit: () => setTool('select'),
+  onDone: (m) => {
+    if (state.doc?.kind === 'cad') logMeasure(m);
+    if (state.cmdMeasure) setTool('select');
+    viewer.renderOverlay();
+  },
   onCalibrate: (pts) => openCalibration(Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1])),
 };
 
@@ -653,7 +666,10 @@ const EDIT_TOOLS = {
 let currentTool = 'select';
 let lastCommand = null;
 function setTool(name) {
-  if (EDIT_TOOLS[name] && !activeSpace()) name = 'select';
+  if ((EDIT_TOOLS[name] || name === 'zoom') && !activeSpace()) name = 'select';
+  // DIST and AREA typed in the command line end after one measurement, like AutoCAD.
+  state.cmdMeasure = cmdMeasureNext && name.startsWith('measure:');
+  cmdMeasureNext = false;
   currentTool = name;
   if (state.doc?.kind === '3d') {
     if (name === 'zoomWindow' || EDIT_TOOLS[name] || name.startsWith('measure:') && name !== 'measure:dist') name = currentTool = name.startsWith('measure:') ? 'measure:dist' : 'select';
@@ -663,7 +679,8 @@ function setTool(name) {
     const type = name.slice(3);
     viewer.setTool(new MarkupDrawTool(type === 'cloudPoly' ? 'cloud' : type, mkEnv, { cloud: type === 'cloudPoly' ? 'poly' : 'rect' }));
   } else if (name === 'select' || name.startsWith('mk:')) viewer.setTool(new SelectTool(ed));
-  else if (name === 'pan') viewer.setTool(new PanTool());
+  else if (name === 'pan') viewer.setTool(new PanTool(() => setTool('select')));
+  else if (name === 'zoom') viewer.setTool(new ZoomTool(zoomEnv));
   else if (name === 'zoomWindow') viewer.setTool(new RectTool((bb) => { viewer.zoomToBox(bb, 0.02); setTool('select'); }, t('zoomWindow')));
   else if (name.startsWith('measure:')) viewer.setTool(new MeasureTool(name.slice(8), measureEnv));
   else if (EDIT_TOOLS[name]) { lastCommand = name; viewer.setTool(EDIT_TOOLS[name](ed)); }
@@ -878,6 +895,7 @@ function undo() {
   if (viewer.tool?.undoPoint?.()) { viewer.renderOverlay(); updateCmdline(); return; }
   const label = state.edit.undo();
   toast(label ? `${t('undone')}: ${label}` : t('nothingToUndo'), false, 1600);
+  cmdLog(label ? `${t('undone')}: ${label}` : t('nothingToUndo'));
 }
 
 function redo() {
@@ -889,6 +907,7 @@ function redo() {
   if (!state.edit) return;
   const label = state.edit.redo();
   toast(label ? `${t('redone')}: ${label}` : t('nothingToRedo'), false, 1600);
+  cmdLog(label ? `${t('redone')}: ${label}` : t('nothingToRedo'));
 }
 
 function setOrtho(on) {
@@ -906,27 +925,41 @@ function setSnap(on) {
   viewer.renderOverlay();
 }
 
-// ---------------------------------------------------------------- command line
+// ---------------------------------------------------------------- command window
+const cmdwin = new CommandWindow($('#cmdbar'), {
+  submit: (text) => submitCommand(text),
+  cancel: () => cancelCommand(),
+  suggest: (text) => suggestCommands(text),
+  waiting: () => !!viewer.tool?.prompt,
+  textInput: () => !!viewer.tool?.prompt && viewer.tool.inputKind === 'text',
+  changed: () => viewer.renderOverlay(),
+  onLayout: (h) => $('#stage').style.setProperty('--cmd-h', `${h}px`),
+});
+/** Adds a line to the command history (kind: 'msg', 'result', 'error'). */
+const cmdLog = (text, kind = 'msg') => cmdwin.log(text, kind);
+const commandName = (cmd) => COMMANDS.find((c) => c.cmd === cmd)?.name ?? String(cmd).toUpperCase();
+
 /** Shows the active command's prompt; the input takes typed coordinates, values and command aliases. */
 function updateCmdline(typing = false) {
-  const bar = $('#cmdbar');
   const prompt = viewer.tool?.prompt || '';
   const input = $('#cmdInput');
-  const show = state.doc?.kind === 'cad' && (!!prompt || typing || document.activeElement === input || !!input.value);
-  if (bar.hidden === show) bar.hidden = !show;
-  const text = prompt || 'Command:';
-  if ($('#cmdPrompt').textContent !== text) { $('#cmdPrompt').textContent = text; bar.classList.remove('bad'); }
+  // Phones: shown only while a command runs or the line is used (it takes room from the drawing).
+  const show = state.doc?.kind === 'cad' && (!cmdwin.small || !!prompt || typing || document.activeElement === input || !!input.value);
+  cmdwin.setVisible(show);
+  cmdwin.setPrompt(prompt || 'Command:');
 }
 
 function submitCommand(text) {
   const input = $('#cmdInput');
   const tool = viewer.tool;
   if (tool?.prompt && tool.input) {
+    cmdwin.echo(text);
     let accepted = false;
     try {
       accepted = tool.input(text);
     } catch (err) {
       console.error(err);
+      cmdLog(`${t('invalidInput')}: ${err.message}`, 'error');
       toast(`${t('invalidInput')}: ${err.message}`, true, 4000);
       input.value = '';
       setTool('select');
@@ -934,7 +967,8 @@ function submitCommand(text) {
     }
     if (!accepted) {
       $('#cmdbar').classList.add('bad');
-      toast(`${t('invalidInput')}: ${text}`, true, 2500);
+      cmdLog(`${t('invalidInput')}: ${text.trim()}`, 'error');
+      if (!cmdwin.showsHistory) toast(`${t('invalidInput')}: ${text}`, true, 2500);
       return;
     }
     input.value = '';
@@ -942,8 +976,16 @@ function submitCommand(text) {
     input.value = '';
     const word = text.trim().toUpperCase();
     const cmd = word ? ALIASES[word] : lastCommand;
-    if (!cmd) { if (word) toast(`${t('unknownCommand')}: ${text.trim()}`, true, 2500); }
-    else runCommand(cmd);
+    if (!cmd) {
+      if (word) {
+        cmdwin.echo(word);
+        cmdLog(`Unknown command "${word}". Type a command name or alias (L, PL, C, M, Z…).`, 'error');
+        if (!cmdwin.showsHistory) toast(`${t('unknownCommand')}: ${text.trim()}`, true, 2500);
+      }
+    } else {
+      cmdwin.echo(commandName(cmd));
+      runCommand(cmd);
+    }
   }
   viewer.renderOverlay();
   updateCmdline();
@@ -951,32 +993,70 @@ function submitCommand(text) {
   if (!(viewer.tool?.prompt && viewer.tool.inputKind === 'text')) input.blur();
 }
 
-function runCommand(cmd) {
-  if (state.doc?.kind !== 'cad') return;
-  if (cmd === 'undo') undo();
-  else if (cmd === 'redo') redo();
-  else if (EDIT_TOOLS[cmd]) setTool(cmd);
+function suggestCommands(text) {
+  return state.doc?.kind === 'cad' ? suggest(text) : [];
 }
 
-$('#cmdInput').addEventListener('keydown', (ev) => {
-  const input = ev.currentTarget;
-  if (ev.key === 'Enter' || (ev.key === ' ' && viewer.tool?.inputKind !== 'text' && input.value.trim())) {
-    ev.preventDefault();
-    submitCommand(input.value);
-  } else if (ev.key === 'Escape') {
-    ev.preventDefault();
-    ev.stopPropagation();
-    if (input.value) { input.value = ''; viewer.renderOverlay(); return; }
-    input.blur();
-    cancelCommand();
+let cmdMeasureNext = false;
+/** Runs an app command (from the command line, the toolbar's cmd: actions or Enter to repeat). */
+function runCommand(cmd) {
+  if (state.doc?.kind !== 'cad') return;
+  lastCommand = cmd;
+  switch (cmd) {
+    case 'undo': undo(); break;
+    case 'redo': redo(); break;
+    case 'zoom': setTool('zoom'); break;
+    case 'pan': setTool('pan'); break;
+    case 'layer':
+      setSideTab('layers');
+      $('#sidebar').classList.add('open');
+      break;
+    case 'dist': case 'area':
+      cmdMeasureNext = true;
+      setTool(`measure:${cmd}`);
+      break;
+    case 'print': openPrint(); break;
+    case 'save': saveDrawing(false); break;
+    case 'saveas': saveDrawing(true); break;
+    case 'open': chooseFile(); break;
+    case 'ortho': setOrtho(!state.ortho); cmdLog(`<Ortho ${state.ortho ? 'on' : 'off'}>`); break;
+    case 'osnap': setSnap(!state.snap); cmdLog(`<Osnap ${state.snap ? 'on' : 'off'}>`); break;
+    default: if (EDIT_TOOLS[cmd]) setTool(cmd);
   }
-});
-$('#cmdInput').addEventListener('input', () => { $('#cmdbar').classList.remove('bad'); viewer.renderOverlay(); });
+}
+
+/** Measurement results go into the command history (drawing units). */
+function logMeasure(m) {
+  const { factor, unit } = measureUnits();
+  const pts = m.pts;
+  const len = (a, b) => Math.hypot(b[0] - a[0], b[1] - a[1]) * factor;
+  if (m.mode === 'dist') {
+    const dx = (pts[1][0] - pts[0][0]) * factor, dy = (pts[1][1] - pts[0][1]) * factor;
+    const ang = ((Math.atan2(dy, dx) * 180) / Math.PI + 360) % 360;
+    cmdLog(`Distance = ${formatLength(len(pts[0], pts[1]), unit)},  Angle in XY plane = ${ang.toFixed(2)}°\nDelta X = ${formatLength(dx, unit)},  Delta Y = ${formatLength(dy, unit)}`, 'result');
+  } else {
+    let total = 0;
+    for (let i = 1; i < pts.length; i++) total += len(pts[i - 1], pts[i]);
+    if (m.mode === 'path') { cmdLog(`Length = ${formatLength(total, unit)} (${pts.length - 1} segments)`, 'result'); return; }
+    const area = Math.abs(polygonArea(pts.flat())) * factor * factor;
+    cmdLog(`Area = ${formatArea(area, unit)},  Perimeter = ${formatLength(total + len(pts.at(-1), pts[0]), unit)}`, 'result');
+  }
+}
+
+const zoomEnv = {
+  extents: () => viewer.zoomExtents(),
+  window: (bb) => viewer.zoomToBox(bb, 0.02),
+  previous: () => { if (!viewer.zoomPrevious()) cmdLog('No previous view saved.', 'error'); },
+  factor: (k) => viewer.zoomAt(k),
+  done: () => setTool('select'),
+};
+
 $('#cmdInput').addEventListener('blur', () => setTimeout(() => updateCmdline(), 0));
 $('#cmdInput').addEventListener('focus', () => updateCmdline(true));
 
 /** Esc: the tool takes back its step, or the command ends (and the selection clears in Select). */
 function cancelCommand() {
+  if (viewer.tool?.prompt) cmdwin.echo('*Cancel*');
   if (viewer.tool?.key?.({ key: 'Escape' })) { viewer.renderOverlay(); updateCmdline(); return; }
   if (currentTool !== 'select') setTool('select');
   else if (state.selection.length || state.highlights.length) { state.selection = []; state.highlights = []; selectionChanged(); }
@@ -2486,6 +2566,7 @@ document.addEventListener('keydown', (ev) => {
   }
   if (cad && ev.key === 'F8') { ev.preventDefault(); setOrtho(!state.ortho); return; }
   if (cad && ev.key === 'F3') { ev.preventDefault(); setSnap(!state.snap); return; }
+  if (cad && ev.key === 'F2') { ev.preventDefault(); cmdwin.toggleExpanded(); return; }
   if (mod || ev.altKey || inField || ev.target.closest('dialog')) return;
   if (cad && ev.key === ' ' && !$('#cmdInput').value) {
     // Space held down: left-drag pans (released on keyup).
@@ -2493,10 +2574,12 @@ document.addEventListener('keydown', (ev) => {
     if (!ev.repeat) viewer.setPanKey(true);
     return;
   }
+  if (cad && ev.key === 'Escape' && viewer.tool?.prompt) cmdwin.echo('*Cancel*');
   if (viewer.tool?.key?.(ev)) { viewer.renderOverlay(); updateCmdline(); ev.preventDefault(); return; }
   if (cad && ev.key === 'Enter' && currentTool === 'select' && lastCommand) {
     // Enter repeats the last command, as in AutoCAD.
     ev.preventDefault();
+    cmdwin.echo(commandName(lastCommand));
     runCommand(lastCommand);
     return;
   }
@@ -2508,13 +2591,13 @@ document.addEventListener('keydown', (ev) => {
   // Typing goes to the command line: values while a command waits, command aliases (L, PL, M...) otherwise.
   if (cad && ev.key.length === 1 && TYPABLE.test(ev.key) && ev.key !== ' ') {
     const waiting = !!viewer.tool?.prompt;
-    const alias = currentTool === 'select' && /^[a-z]$/i.test(ev.key) && !/^f$/i.test(ev.key);
+    const input = $('#cmdInput');
+    // Letters start a command name (Home zooms to the extents); while a command waits, every key goes to its prompt.
+    const alias = /^[a-z]$/i.test(ev.key);
     if (waiting || alias) {
       ev.preventDefault();
-      const input = $('#cmdInput');
-      input.value += ev.key;
       updateCmdline(true);
-      input.focus();
+      cmdwin.type(ev.key);
       viewer.renderOverlay();
       return;
     }

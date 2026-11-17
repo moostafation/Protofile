@@ -32,6 +32,8 @@ export class Viewer {
     this.interacting = false;
     this.panKey = false; // Space held: left-drag pans
     this.lastPaint = 0;
+    this.views = []; // earlier views for ZOOM Previous
+    this.gestureTimer = 0;
     this.resize = this.resize.bind(this);
     new ResizeObserver(this.resize).observe(host);
     this.bindInput();
@@ -57,6 +59,7 @@ export class Viewer {
   setDocument(doc) {
     this.doc = doc;
     this.snapView = null;
+    this.views = [];
     this.zoomExtents();
   }
 
@@ -134,8 +137,34 @@ export class Viewer {
     this.changed(false);
   }
 
+  /** ZOOM Previous: back to the view before the last zoom or pan. Returns false when there is none. */
+  zoomPrevious() {
+    const v = this.views.pop();
+    if (!v) return false;
+    this.restoring = true;
+    this.view = { ...v };
+    this.changed(true);
+    this.restoring = false;
+    return true;
+  }
+
+  /** Remembers the view a change starts from (once per gesture) for zoomPrevious. */
+  rememberView(final) {
+    const v = this.snapView;
+    if (!this.restoring && (final || !this.gestureTimer) && v) {
+      const last = this.views.at(-1);
+      if (!last || last.cx !== v.cx || last.cy !== v.cy || last.scale !== v.scale) {
+        this.views.push({ ...v });
+        if (this.views.length > 50) this.views.shift();
+      }
+    }
+    clearTimeout(this.gestureTimer);
+    this.gestureTimer = setTimeout(() => { this.gestureTimer = 0; }, 400);
+  }
+
   changed(final) {
-    this.events.onView?.(this.view);
+    this.rememberView(final);
+    if (!this.viewFrame) this.viewFrame = requestAnimationFrame(() => { this.viewFrame = 0; this.events.onView?.(this.view); });
     if (final || !this.slow) {
       this.render(true);
       return;
@@ -236,7 +265,7 @@ export class Viewer {
       this.snapView = { ...this.view };
     }
     this.lastPaint = performance.now();
-    this.renderOverlay();
+    this.renderOverlay(true);
   }
 
   renderQuick() {
@@ -251,7 +280,7 @@ export class Viewer {
     ctx.setTransform(k, 0, 0, k, sx * this.dpr, sy * this.dpr);
     ctx.drawImage(this.snapshot, 0, 0);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    this.renderOverlay();
+    this.renderOverlay(true);
   }
 
   /** Screen position (css px) in the current view of the top-left corner of a snapshot taken with `v`. */
@@ -261,15 +290,27 @@ export class Viewer {
     return this.worldToScreen(wx, wy);
   }
 
-  renderOverlay() {
-    cancelAnimationFrame(this.overlayFrame);
+  /** Redraws the tool overlay at the next frame (`now`: in this frame, from a rAF callback). Coalesced. */
+  renderOverlay(now = false) {
+    if (now) {
+      cancelAnimationFrame(this.overlayFrame);
+      this.overlayFrame = 0;
+      this.paintOverlay();
+      return;
+    }
+    if (this.overlayFrame) return;
     this.overlayFrame = requestAnimationFrame(() => {
-      const o = this.octx;
-      o.setTransform(1, 0, 0, 1, 0, 0);
-      o.clearRect(0, 0, this.overlay.width, this.overlay.height);
-      this.events.drawOverlay?.(o, this);
-      this.tool?.drawOverlay?.(o, this);
+      this.overlayFrame = 0;
+      this.paintOverlay();
     });
+  }
+
+  paintOverlay() {
+    const o = this.octx;
+    o.setTransform(1, 0, 0, 1, 0, 0);
+    o.clearRect(0, 0, this.overlay.width, this.overlay.height);
+    this.events.drawOverlay?.(o, this);
+    this.tool?.drawOverlay?.(o, this);
   }
 
   /** Exports the current view as a PNG data URL (used for the AI "look at this view" feature). */
@@ -312,11 +353,21 @@ export class Viewer {
       const x = ev.clientX - r.left, y = ev.clientY - r.top;
       const p = this.pointers.get(ev.pointerId);
       if (!p) {
+        // Hover: mice report up to 1000 moves per second; picking, snapping, the status text and the
+        // overlay are updated once per frame for the latest position.
         this.cursor = [x, y];
-        const w = this.screenToWorld(x, y);
-        this.events.onCursor?.(w, [x, y]);
-        this.tool?.move?.(w, [x, y], this);
-        this.renderOverlay();
+        this.hoverAt = [x, y];
+        if (!this.hoverFrame) {
+          this.hoverFrame = requestAnimationFrame(() => {
+            this.hoverFrame = 0;
+            const at = this.hoverAt;
+            if (!at || this.pointers.size) return;
+            const w = this.screenToWorld(at[0], at[1]);
+            this.events.onCursor?.(w, at);
+            this.tool?.move?.(w, at, this);
+            this.renderOverlay(true);
+          });
+        }
         return;
       }
       if (this.pointers.size === 2 && this.pinch) {
@@ -341,8 +392,13 @@ export class Viewer {
         else this.panBy(dx, dy);
       }
       this.cursor = [x, y];
-      const w = this.screenToWorld(x, y);
-      this.events.onCursor?.(w, [x, y]);
+      this.hoverAt = null;
+      if (!this.dragFrame) {
+        this.dragFrame = requestAnimationFrame(() => {
+          this.dragFrame = 0;
+          if (this.cursor) this.events.onCursor?.(this.screenToWorld(...this.cursor), this.cursor);
+        });
+      }
       this.renderOverlay();
     });
 

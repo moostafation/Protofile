@@ -99,6 +99,40 @@ export class RectTool {
 }
 
 /**
+ * ZOOM command: a window by two clicks or a drag, or an option typed in the command line
+ * (All / Extents / Previous / Window, or a factor such as 2 or 2x). env: { extents, window(bb), previous, factor(k), done }
+ */
+export class ZoomTool extends RectTool {
+  constructor(env) {
+    super((bb) => { env.window(bb); env.done(); }, null);
+    this.env = env;
+  }
+  get prompt() {
+    if (this.first) return 'ZOOM  Specify opposite corner:';
+    return 'ZOOM  Specify corner of window, enter a scale factor (nX) or [All/Extents/Previous/Window] <Extents>:';
+  }
+  input(text) {
+    const t = text.trim().toUpperCase();
+    const env = this.env;
+    if (t === 'W' || t === 'WINDOW') return true; // the window is the default action already
+    if (!t || 'EXTENTS'.startsWith(t) || 'ALL'.startsWith(t)) env.extents();
+    else if ('PREVIOUS'.startsWith(t)) env.previous();
+    else {
+      const m = /^(\d+\.?\d*|\.\d+)\s*X?$/.exec(t);
+      if (!m || !(parseFloat(m[1]) > 0)) return false;
+      env.factor(parseFloat(m[1]));
+    }
+    env.done();
+    return true;
+  }
+  key(ev) {
+    if (ev.key === 'Enter') { this.input(''); return true; }
+    if (ev.key === 'Escape' && this.first) { this.cancel(); return true; }
+    return false;
+  }
+}
+
+/**
  * Measurement tool. `mode`: 'dist' | 'path' | 'area' | 'calibrate'.
  * `env` = { snap(world, viewer) -> {x,y,kind}|null, units() -> { factor, unit }, store: [] (finished measurements), onDone(m) }
  */
@@ -151,6 +185,32 @@ export class MeasureTool {
   }
 
   cancel() { this.points = []; this.hoverPt = null; }
+
+  /** Command-line prompt (CAD drawings, env.prompts()). */
+  get prompt() {
+    if (!this.env.prompts?.()) return '';
+    const n = this.points.length;
+    if (this.mode === 'dist') return n ? 'DIST  Specify second point:' : 'DIST  Specify first point:';
+    if (this.mode === 'area') return n ? `AREA  Specify next point or [Undo]${n >= 3 ? ', Enter to total' : ''}:` : 'AREA  Specify first corner point:';
+    if (this.mode === 'path') return n ? 'MEASURE  Specify next point or [Undo], Enter to finish:' : 'MEASURE  Specify first point:';
+    return '';
+  }
+
+  /** Typed input: a point (x,y / @dx,dy / @d<a), U to take back a point, empty to finish or exit. */
+  input(text) {
+    const t = text.trim().toUpperCase();
+    if (!t) {
+      if (!this.points.length) this.env.exit?.();
+      else this.finish();
+      return true;
+    }
+    if (t === 'U' || t === 'UNDO') { this.points.pop(); return true; }
+    const p = this.env.typedPoint?.(text, this.points.at(-1) ?? null);
+    if (!p) return false;
+    this.points.push(p);
+    if (this.mode === 'dist' && this.points.length === 2) this.finish();
+    return true;
+  }
 
   describe(mode, pts) {
     const { factor, unit } = this.env.units();
